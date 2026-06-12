@@ -7,6 +7,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
+from deerflow.tools.builtins.sql_tools import SQL_TOOLS
 from deerflow.tools.mcp_metadata import tag_mcp_tool
 from deerflow.tools.sync import make_sync_tool_wrapper
 
@@ -21,6 +22,8 @@ SUBAGENT_TOOLS = [
     task_tool,
     # task_status_tool is no longer exposed to LLM (backend handles polling internally)
 ]
+
+SQL_BUILTIN_TOOLS = SQL_TOOLS
 
 
 def _is_host_bash_tool(tool: object) -> bool:
@@ -48,6 +51,7 @@ def get_available_tools(
     subagent_enabled: bool = False,
     *,
     app_config: AppConfig | None = None,
+    include_sql_tools: bool = True,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -59,6 +63,7 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
+        include_sql_tools: Whether to include SQL tools for database querying (default: True).
 
     Returns:
         List of available tools.
@@ -99,6 +104,11 @@ def get_available_tools(
     if subagent_enabled:
         builtin_tools.extend(SUBAGENT_TOOLS)
         logger.info("Including subagent tools (task)")
+
+    # Add SQL tools for database querying (used by mysql-query subagent).
+    if include_sql_tools:
+        builtin_tools.extend(SQL_BUILTIN_TOOLS)
+        logger.info(f"Including SQL tools ({len(SQL_BUILTIN_TOOLS)} tools)")
 
     # If no model_name specified, use the first model (default)
     if model_name is None and config.models:
