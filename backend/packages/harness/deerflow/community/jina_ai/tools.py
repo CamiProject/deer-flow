@@ -1,5 +1,3 @@
-import asyncio
-
 from langchain.tools import tool
 
 from deerflow.community.jina_ai.jina_client import JinaClient
@@ -64,5 +62,5 @@ async def web_fetch_tool(url: str) -> str:
     html_content = await jina_client.crawl(url, return_format="html", timeout=timeout, proxy=proxy, trust_env=trust_env)
     if isinstance(html_content, str) and html_content.startswith("Error:"):
         return html_content
-    article = await asyncio.to_thread(readability_extractor.extract_article, html_content)
+    article = readability_extractor.extract_article(html_content)
     return article.to_markdown()[:4096]

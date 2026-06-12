@@ -23,7 +23,15 @@ def configure_stdio() -> None:
 def run_command(command: list[str]) -> str | None:
     """Run a command and return trimmed stdout, or None on failure."""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, shell=False)
+        # On Windows, use shell=True for better compatibility with .cmd/.bat files
+        use_shell = sys.platform == "win32"
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=use_shell,
+        )
     except (OSError, subprocess.CalledProcessError):
         return None
     return result.stdout.strip() or result.stderr.strip()

@@ -1,4 +1,5 @@
 ﻿import {
+  BarChartIcon,
   CompassIcon,
   GraduationCapIcon,
   ImageIcon,
@@ -60,9 +61,9 @@ export const zhCN: Translations = {
 
   // Welcome
   welcome: {
-    greeting: "你好，欢迎回来！",
+    greeting: "欢迎回到纳泽智能问数工作台！",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "欢迎使用 Naze - DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nNaze - DeerFlow 可以帮你搜索网络、分析能碳平台数据报表，还能为你生成幻灯片、\n图片、视频、播客及网页等。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:
@@ -127,9 +128,9 @@ export const zhCN: Translations = {
         icon: ShapesIcon,
       },
       {
-        suggestion: "学习",
-        prompt: "学习关于[主题]并创建教程。",
-        icon: GraduationCapIcon,
+        suggestion: "分析设备报表",
+        prompt: "用SQL技能,查询下[武汉双碳租户]下的[汉口银行中山路支行][本月]的PA用电量逐日统计,并用chart技能生成一个[折线图]展示,图表展示语言为[英文]。",
+        icon: BarChartIcon,
       },
     ],
     suggestionsCreate: [

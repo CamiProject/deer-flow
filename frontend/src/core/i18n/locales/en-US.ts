@@ -62,7 +62,7 @@ export const enUS: Translations = {
   welcome: {
     greeting: "Hello, again!",
     description:
-      "Welcome to 🦌 DeerFlow, an open source super agent. With built-in and custom skills, DeerFlow helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything.",
+      "Welcome to Naze - DeerFlow, an open source super agent. With built-in and custom skills, Naze - DeerFlow helps you search on the web, analyze energy carbon platform data reports, and generate artifacts like slides, images, videos, podcasts, and web pages.",
 
     createYourOwnSkill: "Create Your Own Skill",
     createYourOwnSkillDescription:
