@@ -145,7 +145,8 @@ The general-purpose subagent inherits all tools including these SQL tools:
 | `carbon_client_efficiency_xxxxxx.iot_project` | 项目层级 |
 | `carbon_client_efficiency_xxxxxx.iot_site` | 场地 / 场站层级 |
 | `carbon_client_efficiency_xxxxxx.iot_device` | 设备层级 |
-| `carbon_client_efficiency_xxxxxx.iot_report_energy_day` | 汇总报表 |
+| `carbon_client_efficiency_xxxxxx.iot_statistics_day` | 按日报表 |
+| `carbon_client_efficiency_xxxxxx.iot_statistics_month` | 按月报表 |
 
 ## 某些场景下的人工完整查询参考案例
 
