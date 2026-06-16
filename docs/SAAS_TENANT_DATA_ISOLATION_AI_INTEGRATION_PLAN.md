@@ -69,11 +69,11 @@
 
 ## 3. 推荐整体架构
 
-生产环境建议保留 SaaS Gateway/BFF 作为可信身份边界，DeerFlow 不直接暴露给浏览器。
+生产环境建议保留 SaaS Gateway 作为可信身份边界，DeerFlow 不直接暴露给浏览器。
 
 ```text
 SaaS Frontend AI Chat
-  -> SaaS Gateway / BFF
+  -> SaaS Gateway
     -> DeerFlow Gateway
       -> Tenant-aware SQL Resolver
         -> conf_database
@@ -85,7 +85,7 @@ SaaS Frontend AI Chat
 | 层级 | 职责 |
 | --- | --- |
 | SaaS Frontend | 展示 AI Chat，提交自然语言问题，展示流式答案、表格、图表、SQL 解释 |
-| SaaS Gateway/BFF | 校验登录态，解析真实租户，清理伪造头，判断 AI 能力权限，转发可信上下文给 DeerFlow |
+| SaaS Gateway | 校验登录态，解析真实租户，清理伪造头，判断 AI 能力权限，转发可信上下文给 DeerFlow |
 | DeerFlow Gateway | 管理 AI 会话、运行、流式事件、thread/run 隔离、调用 Agent |
 | DeerFlow SQL Resolver | 根据可信租户上下文解析 `conf_database`，生成受限 MySQL 连接 |
 | MySQL SQL Tools | 只执行授权范围内的只读 SQL |
@@ -362,7 +362,7 @@ LIMIT 1;
 - DeerFlow 需要知道 `conf_database` 表结构和 JDBC URL 解析规则。
 - DeerFlow 需要具备解密 `conf_database.password` 的能力，如果该字段加密存储。
 
-#### 方案 B：SaaS Gateway/BFF 解析数据源，DeerFlow 只拿 data_source_ref
+#### 方案 B：SaaS Gateway 解析数据源，DeerFlow 只拿 data_source_ref
 
 SaaS Gateway 查询 `conf_database`，得到数据源后，在一个内部 DataSource Registry 中登记临时引用：
 
@@ -570,7 +570,7 @@ tools=[
 
 ## 9. API 设计建议
 
-### 9.1 SaaS BFF 对前端 API
+### 9.1 SaaS Gateway 对前端 API
 
 ```http
 POST /api/ai/tenant-chat/stream
@@ -595,7 +595,7 @@ Authorization: Bearer <saas-token>
 响应：
 
 - SSE 透传 DeerFlow 事件。
-- 或由 BFF 转换成前端 AI 组件自己的事件格式。
+- 或由 SaaS Gateway 转换成前端 AI 组件自己的事件格式。
 
 ### 9.2 DeerFlow 内部 API
 
@@ -671,14 +671,14 @@ POST /api/ai/query
 
 目标：
 
-- SaaS BFF 能代表当前登录用户调用 DeerFlow。
+- SaaS Gateway 能代表当前登录用户调用 DeerFlow。
 - DeerFlow thread/run 归属到 SaaS 用户 ID。
 - 前端 AI Chat 能流式显示 DeerFlow 回答。
 
 改造点：
 
-- SaaS BFF 新增 `/api/ai/tenant-chat/stream`。
-- BFF 调 DeerFlow 时带：
+- 在现有 SaaS Gateway 新增 `/api/ai/tenant-chat/stream`，作为 AI Chat 组件的统一入口；这里不是新增独立 BFF 服务。
+- SaaS Gateway 调 DeerFlow 时带：
   - `X-DeerFlow-Internal-Token`
   - `X-DeerFlow-Owner-User-Id`
   - `X-SaaS-Tenant-Id`
@@ -725,38 +725,6 @@ POST /api/ai/query
 - `sql_query()` 执行前校验 SQL 只读和库表授权。
 - `sql_query_checker()` 使用当前租户库做 `EXPLAIN`。
 
-### 阶段 4：业务语义层
-
-目标：
-
-- 让自然语言问数更稳定，不只靠表名猜测。
-
-建议增加配置：
-
-```yaml
-semantic_catalog:
-  efficiency:
-    default_database_pattern: carbon_client_efficiency_{tenant_code}
-    tables:
-      iot_project:
-        description: 项目表
-      iot_site:
-        description: 场站表
-      iot_device:
-        description: 设备表
-      iot_report_energy_day:
-        description: 能耗日报表
-        time_column: create_time
-        metrics:
-          pa_total:
-            expression: "SUM(report_value)"
-            filters:
-              attribute_identifier: "Pa_total"
-              report_type: 1
-```
-
-Agent 可以先读语义层，再生成 SQL。
-
 ## 12. 最小可行闭环
 
 针对“纳泽演示”的最小可行闭环：
@@ -767,7 +735,7 @@ Agent 可以先读语义层，再生成 SQL。
    - `tenantName = 纳泽演示`
 3. 用户在 AI Chat 中提问：
    - “本月 PA 用电量是多少？”
-4. SaaS BFF 调 DeerFlow，写入可信 header：
+4. SaaS Gateway 调 DeerFlow，写入可信 header：
    - `X-SaaS-Tenant-Code: 20251231184555_6`
    - `X-SaaS-System-Code: efficiency`
 5. DeerFlow 注入 run context：
@@ -795,7 +763,7 @@ LIMIT 100;
 
 ## 13. 关键结论
 
-- SaaS Gateway/BFF 必须继续作为可信身份和租户边界。
+- SaaS Gateway 必须继续作为可信身份和租户边界。
 - DeerFlow 不应直接信任前端传入的 `tenantCode`。
 - DeerFlow SQL 工具应从“全局 `.env` MySQL 连接”改造成“基于可信 run context 的租户数据源解析”。
 - `belongTenantCode` 是 DeerFlow 智能问数租户隔离的核心输入。
