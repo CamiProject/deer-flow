@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from types import SimpleNamespace
 from typing import Any
@@ -12,8 +13,14 @@ from deerflow.runtime.user_context import DEFAULT_USER_ID
 
 INTERNAL_AUTH_HEADER_NAME = "X-DeerFlow-Internal-Token"
 INTERNAL_OWNER_USER_ID_HEADER_NAME = "X-DeerFlow-Owner-User-Id"
+SAAS_TENANT_ID_HEADER_NAME = "X-SaaS-Tenant-Id"
+SAAS_TENANT_CODE_HEADER_NAME = "X-SaaS-Tenant-Code"
+SAAS_TENANT_NAME_HEADER_NAME = "X-SaaS-Tenant-Name"
+SAAS_SYSTEM_CODE_HEADER_NAME = "X-SaaS-System-Code"
 INTERNAL_AUTH_ENV_VAR = "DEER_FLOW_INTERNAL_AUTH_TOKEN"
 INTERNAL_SYSTEM_ROLE = "internal"
+
+_SAFE_HEADER_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
 def _load_internal_auth_token() -> str:
@@ -83,3 +90,47 @@ def get_trusted_internal_owner_user_id(request: Any) -> str | None:
         return None
     owner_user_id = owner_user_id.strip()
     return owner_user_id or None
+
+
+def _clean_required_header(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    if not value or not _SAFE_HEADER_VALUE_RE.fullmatch(value):
+        return None
+    return value
+
+
+def _clean_optional_header(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def get_trusted_saas_context(request: Any) -> dict[str, str]:
+    """Return trusted SaaS tenant context from internal Gateway headers.
+
+    These headers are ignored for browser/API callers. They are honored only
+    after ``AuthMiddleware`` validates ``X-DeerFlow-Internal-Token`` and stamps
+    the synthetic internal user onto ``request.state.user``.
+    """
+    user = getattr(getattr(request, "state", None), "user", None)
+    if getattr(user, "system_role", None) != INTERNAL_SYSTEM_ROLE:
+        return {}
+
+    tenant_id = _clean_required_header(request.headers.get(SAAS_TENANT_ID_HEADER_NAME))
+    tenant_code = _clean_required_header(request.headers.get(SAAS_TENANT_CODE_HEADER_NAME))
+    system_code = _clean_required_header(request.headers.get(SAAS_SYSTEM_CODE_HEADER_NAME))
+    if not tenant_id or not tenant_code or not system_code:
+        return {}
+
+    context = {
+        "tenant_id": tenant_id,
+        "tenant_code": tenant_code,
+        "system_code": system_code,
+    }
+    tenant_name = _clean_optional_header(request.headers.get(SAAS_TENANT_NAME_HEADER_NAME))
+    if tenant_name:
+        context["tenant_name"] = tenant_name
+    return context

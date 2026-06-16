@@ -27,6 +27,7 @@ from app.gateway.internal_auth import (
     INTERNAL_SYSTEM_ROLE,
     get_internal_user,
     get_trusted_internal_owner_user_id,
+    get_trusted_saas_context,
 )
 from app.gateway.utils import sanitize_log_param
 from deerflow.config.app_config import get_app_config
@@ -181,6 +182,25 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 # arbitrary HTTP/IM clients must not be able to force autonomous execution.
 _CONTEXT_INTERNAL_CALLER_KEYS: frozenset[str] = frozenset({"non_interactive"})
 
+_PROTECTED_SAAS_CONTEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "saas_user_id",
+        "tenant_id",
+        "tenant_code",
+        "tenant_name",
+        "system_code",
+    }
+)
+
+
+def _strip_protected_saas_context_values(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop caller-controlled fields reserved for trusted server context."""
+    return {
+        key: value
+        for key, value in context.items()
+        if key not in _PROTECTED_SAAS_CONTEXT_KEYS and not (isinstance(key, str) and key.startswith("__"))
+    }
+
 # Keys forwarded from ``body.context`` into ``config['context']`` ONLY (the
 # runtime context that becomes ``ToolRuntime.context`` / ``runtime.context``),
 # never into ``config['configurable']``. These are read by tools and
@@ -318,6 +338,26 @@ def inject_authenticated_user_context(
         runtime_context["oauth_id"] = getattr(user, "oauth_id", None)
 
 
+def inject_trusted_saas_context(config: dict[str, Any], request: Request, *, owner_user_id: str | None = None) -> None:
+    """Stamp trusted SaaS tenant context from internal Gateway headers.
+
+    Tenant identity is a server-side trust boundary and must never be accepted
+    from ``body.context``. ``get_trusted_saas_context`` only returns values for
+    requests already authenticated as DeerFlow internal callers.
+    """
+    saas_context = get_trusted_saas_context(request)
+    if not saas_context:
+        return
+
+    runtime_context = config.setdefault("context", {})
+    if not isinstance(runtime_context, dict):
+        return
+
+    if owner_user_id:
+        runtime_context["saas_user_id"] = str(owner_user_id)
+    runtime_context.update(saas_context)
+
+
 def resolve_agent_factory(assistant_id: str | None):
     """Resolve the agent factory callable from config.
 
@@ -421,7 +461,7 @@ def build_run_config(
                 # skill enabled/allowlist/declaration gates (#3938). Legitimate
                 # caller keys (``secrets``, ``user_id``, model overrides) never use
                 # the ``__`` prefix.
-                context = {key: value for key, value in context_value.items() if not (isinstance(key, str) and key.startswith("__"))}
+                context = _strip_protected_saas_context_values(context_value)
             else:
                 raise ValueError("request config 'context' must be a mapping or null.")
             context["thread_id"] = thread_id
@@ -434,7 +474,9 @@ def build_run_config(
             config["configurable"] = {"thread_id": thread_id}
         else:
             configurable = {"thread_id": thread_id}
-            configurable.update(request_config.get("configurable", {}))
+            caller_configurable = request_config.get("configurable", {})
+            if isinstance(caller_configurable, Mapping):
+                configurable.update(_strip_protected_saas_context_values(caller_configurable))
             config["configurable"] = configurable
         for k, v in request_config.items():
             if k not in ("configurable", "context"):
@@ -676,6 +718,7 @@ async def start_run(
             strip_internal_context_keys(config)
         internal_owner_user = await resolve_trusted_internal_owner_for_attribution(request, owner_user_id)
         inject_authenticated_user_context(config, request, internal_owner_user=internal_owner_user)
+        inject_trusted_saas_context(config, request, owner_user_id=owner_user_id)
 
         stream_modes = normalize_stream_modes(body.stream_mode)
 

@@ -16,7 +16,9 @@ This skill provides MySQL database querying capabilities by delegating to a **ge
 
 ## Prerequisites
 
-Configure MySQL connection via environment variables in `.env`:
+### Local `.env` Mode
+
+When no trusted SaaS runtime context is present, SQL tools use the local MySQL connection from `.env`:
 
 ```bash
 # Required: MySQL server connection
@@ -31,6 +33,27 @@ MYSQL_DATABASE=your_database
 # Optional: Enable write operations (caution!)
 # MYSQL_ALLOW_WRITE=false
 ```
+
+### SaaS Tenant Mode
+
+When DeerFlow is called by the trusted SaaS Gateway, SQL tools do not use global `MYSQL_HOST` / `MYSQL_DATABASE` for tenant data. Instead:
+
+- SaaS Gateway validates login state and sends trusted headers to DeerFlow.
+- DeerFlow injects `runtime.context.tenant_code` and `runtime.context.system_code`.
+- SQL tools resolve `carbon_client_{system_code}_{tenant_code}` from `conf_database`.
+- Queries are restricted to the resolved tenant database.
+
+Configure the SaaS config database connection in `.env`:
+
+```bash
+SAAS_CONFIG_DB_HOST=your-config-db-host
+SAAS_CONFIG_DB_PORT=3306
+SAAS_CONFIG_DB_USER=your-readonly-user
+SAAS_CONFIG_DB_PASSWORD=your-readonly-password
+SAAS_CONFIG_DB_DATABASE=your-config-database
+```
+
+Tenant context must come from trusted runtime context. Do not ask the user to provide or override tenant identifiers, datasource URLs, passwords, or internal tokens.
 
 ## Workflow
 

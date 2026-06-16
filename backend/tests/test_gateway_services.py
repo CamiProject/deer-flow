@@ -904,6 +904,57 @@ def test_start_run_uses_normalized_input_without_command(_stub_app_config):
     assert graph_input["messages"][0].content == "hi"
 
 
+def test_inject_trusted_saas_context_stamps_internal_headers():
+    from types import SimpleNamespace
+
+    from app.gateway import internal_auth
+    from app.gateway.services import build_run_config, inject_trusted_saas_context
+
+    config = build_run_config("thread-1", None, None)
+    request = SimpleNamespace(
+        headers={
+            internal_auth.SAAS_TENANT_ID_HEADER_NAME: "tenant-1",
+            internal_auth.SAAS_TENANT_CODE_HEADER_NAME: "20251231184555_6",
+            internal_auth.SAAS_TENANT_NAME_HEADER_NAME: "纳泽演示",
+            internal_auth.SAAS_SYSTEM_CODE_HEADER_NAME: "efficiency",
+        },
+        state=SimpleNamespace(user=SimpleNamespace(id="internal-bot", system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    inject_trusted_saas_context(config, request, owner_user_id="saas-user-1")
+
+    assert config["context"]["saas_user_id"] == "saas-user-1"
+    assert config["context"]["tenant_id"] == "tenant-1"
+    assert config["context"]["tenant_code"] == "20251231184555_6"
+    assert config["context"]["tenant_name"] == "纳泽演示"
+    assert config["context"]["system_code"] == "efficiency"
+
+
+def test_inject_trusted_saas_context_overrides_spoofed_body_context():
+    from types import SimpleNamespace
+
+    from app.gateway import internal_auth
+    from app.gateway.services import build_run_config, inject_trusted_saas_context, merge_run_context_overrides
+
+    config = build_run_config("thread-1", None, None)
+    merge_run_context_overrides(config, {"tenant_code": "spoofed", "system_code": "spoofed"})
+    config.setdefault("context", {})["tenant_code"] = "spoofed"
+    config["context"]["system_code"] = "spoofed"
+    request = SimpleNamespace(
+        headers={
+            internal_auth.SAAS_TENANT_ID_HEADER_NAME: "tenant-1",
+            internal_auth.SAAS_TENANT_CODE_HEADER_NAME: "20251231184555_6",
+            internal_auth.SAAS_SYSTEM_CODE_HEADER_NAME: "efficiency",
+        },
+        state=SimpleNamespace(user=SimpleNamespace(id="internal-bot", system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    inject_trusted_saas_context(config, request, owner_user_id="saas-user-1")
+
+    assert config["context"]["tenant_code"] == "20251231184555_6"
+    assert config["context"]["system_code"] == "efficiency"
+
+
 def test_start_run_uses_internal_owner_header_for_persistence(_stub_app_config):
     import asyncio
     from types import SimpleNamespace
@@ -1205,6 +1256,48 @@ def test_build_run_config_context_passthrough_other_keys():
     assert config["context"]["thread_id"] == "thread-1"
     assert config["configurable"] == {"thread_id": "thread-1"}
     assert config["tags"] == ["prod"]
+
+
+def test_build_run_config_strips_protected_saas_context_keys():
+    from app.gateway.services import build_run_config
+
+    config = build_run_config(
+        "thread-1",
+        {
+            "context": {
+                "tenant_id": "spoofed-tenant",
+                "tenant_code": "spoofed-code",
+                "tenant_name": "spoofed-name",
+                "system_code": "spoofed-system",
+                "saas_user_id": "spoofed-user",
+                "agent_name": "allowed-agent",
+            }
+        },
+        None,
+    )
+
+    assert config["context"] == {"agent_name": "allowed-agent"}
+
+
+def test_build_run_config_strips_protected_saas_configurable_keys():
+    from app.gateway.services import build_run_config
+
+    config = build_run_config(
+        "thread-1",
+        {
+            "configurable": {
+                "tenant_code": "spoofed-code",
+                "system_code": "spoofed-system",
+                "model_name": "deepseek-v3",
+            }
+        },
+        None,
+    )
+
+    assert config["configurable"]["thread_id"] == "thread-1"
+    assert config["configurable"]["model_name"] == "deepseek-v3"
+    assert "tenant_code" not in config["configurable"]
+    assert "system_code" not in config["configurable"]
 
 
 def test_build_run_config_no_request_config():

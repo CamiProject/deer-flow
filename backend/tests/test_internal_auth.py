@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 
 
 def test_internal_auth_uses_shared_env_token(monkeypatch):
@@ -78,3 +79,54 @@ def test_get_internal_user_normalises_unsafe_owner_user_id():
     # Empty / None falls back to default.
     assert internal_auth.get_internal_user().id == "default"
     assert internal_auth.get_internal_user(owner_user_id="").id == "default"
+
+
+def test_get_trusted_saas_context_accepts_internal_headers():
+    from app.gateway import internal_auth
+
+    request = SimpleNamespace(
+        headers={
+            internal_auth.SAAS_TENANT_ID_HEADER_NAME: "tenant-1",
+            internal_auth.SAAS_TENANT_CODE_HEADER_NAME: "20251231184555_6",
+            internal_auth.SAAS_TENANT_NAME_HEADER_NAME: "纳泽演示",
+            internal_auth.SAAS_SYSTEM_CODE_HEADER_NAME: "efficiency",
+        },
+        state=SimpleNamespace(user=SimpleNamespace(system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    assert internal_auth.get_trusted_saas_context(request) == {
+        "tenant_id": "tenant-1",
+        "tenant_code": "20251231184555_6",
+        "tenant_name": "纳泽演示",
+        "system_code": "efficiency",
+    }
+
+
+def test_get_trusted_saas_context_ignores_non_internal_user():
+    from app.gateway import internal_auth
+
+    request = SimpleNamespace(
+        headers={
+            internal_auth.SAAS_TENANT_ID_HEADER_NAME: "tenant-1",
+            internal_auth.SAAS_TENANT_CODE_HEADER_NAME: "20251231184555_6",
+            internal_auth.SAAS_SYSTEM_CODE_HEADER_NAME: "efficiency",
+        },
+        state=SimpleNamespace(user=SimpleNamespace(system_role="user")),
+    )
+
+    assert internal_auth.get_trusted_saas_context(request) == {}
+
+
+def test_get_trusted_saas_context_rejects_unsafe_required_headers():
+    from app.gateway import internal_auth
+
+    request = SimpleNamespace(
+        headers={
+            internal_auth.SAAS_TENANT_ID_HEADER_NAME: "tenant-1",
+            internal_auth.SAAS_TENANT_CODE_HEADER_NAME: "20251231184555_6;DROP",
+            internal_auth.SAAS_SYSTEM_CODE_HEADER_NAME: "efficiency",
+        },
+        state=SimpleNamespace(user=SimpleNamespace(system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    assert internal_auth.get_trusted_saas_context(request) == {}
