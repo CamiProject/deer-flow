@@ -81,6 +81,42 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# Load repo-local .env defaults before deriving deploy-time secrets. Values
+# already provided by the caller's shell are kept as explicit overrides.
+load_dotenv_defaults() {
+    local env_file="$1"
+    local line key value
+
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+
+        line="${line#"${line%%[![:space:]]*}"}"
+        if [[ "$line" =~ ^export[[:space:]]+(.+)$ ]]; then
+            line="${BASH_REMATCH[1]}"
+        fi
+
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        value="${value#"${value%%[![:space:]]*}"}"
+
+        if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        fi
+
+        if [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < "$env_file"
+}
+
+load_dotenv_defaults "$REPO_ROOT/.env"
+
 # ── DEER_FLOW_HOME ────────────────────────────────────────────────────────────
 
 if [ -z "$DEER_FLOW_HOME" ]; then
