@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from app.gateway.csrf_middleware import CSRFMiddleware
+from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, create_internal_auth_headers
 
 
 def _make_app() -> FastAPI:
@@ -233,6 +234,29 @@ def test_non_auth_mutation_rejects_mismatched_double_submit_token():
 
     assert response.status_code == 403
     assert response.json()["detail"] == "CSRF token mismatch."
+
+
+def test_non_auth_mutation_allows_valid_internal_token_without_csrf():
+    client = TestClient(_make_app(), base_url="https://deerflow.example")
+
+    response = client.post(
+        "/api/threads/abc/runs/stream",
+        headers=create_internal_auth_headers(),
+    )
+
+    assert response.status_code == 200
+
+
+def test_non_auth_mutation_rejects_invalid_internal_token_without_csrf():
+    client = TestClient(_make_app(), base_url="https://deerflow.example")
+
+    response = client.post(
+        "/api/threads/abc/runs/stream",
+        headers={INTERNAL_AUTH_HEADER_NAME: "wrong-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF token missing. Include X-CSRF-Token header."
 
 
 def test_channel_posts_require_double_submit_csrf():
