@@ -43,3 +43,9 @@ def test_gateway_worker_count_remains_overridable():
     """The worker count must stay configurable, not hard-coded to 1."""
     command = _gateway_command()
     assert "${GATEWAY_WORKERS:-1}" in command, f"worker count must use ${{GATEWAY_WORKERS:-1}} so operators can override it; got: {command}"
+
+
+def test_gateway_runtime_skips_uv_sync_on_startup():
+    """Production startup must not hit PyPI; dependencies are baked into the image."""
+    command = _gateway_command()
+    assert "uv run --no-sync uvicorn app.gateway.app:app" in command, f"gateway runtime must skip uv sync; got: {command}"
