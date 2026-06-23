@@ -24,6 +24,7 @@ from deerflow.agents.thread_state import (
     merge_viewed_images,
 )
 from deerflow.subagents.status_contract import SUBAGENT_STATUS_VALUES
+from deerflow.sandbox.middleware import SandboxMiddlewareState
 
 
 class TestMergeSandbox:
@@ -337,7 +338,16 @@ class TestThreadStateAnnotations:
         INVALID_CONCURRENT_GRAPH_UPDATE error.
         """
         hints = get_type_hints(ThreadState, include_extras=True)
-        assert merge_sandbox in hints["sandbox"].__metadata__
+        sandbox_hint = hints["sandbox"]
+        assert hasattr(sandbox_hint, "__metadata__"), "ThreadState.sandbox must be Annotated with a reducer"
+        assert merge_sandbox in sandbox_hint.__metadata__
+
+    def test_sandbox_middleware_state_preserves_sandbox_reducer(self):
+        """SandboxMiddlewareState also declares sandbox, so it must not drop the reducer."""
+        hints = get_type_hints(SandboxMiddlewareState, include_extras=True)
+        sandbox_hint = hints["sandbox"]
+        assert hasattr(sandbox_hint, "__metadata__"), "SandboxMiddlewareState.sandbox must be Annotated with a reducer"
+        assert merge_sandbox in sandbox_hint.__metadata__
 
     def test_delegations_field_is_wired_to_merge_delegations(self):
         """ThreadState.delegations must merge task records by id."""

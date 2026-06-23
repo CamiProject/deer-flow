@@ -11,17 +11,6 @@ class SandboxState(TypedDict):
     sandbox_id: NotRequired[str | None]
 
 
-class ThreadDataState(TypedDict):
-    workspace_path: NotRequired[str | None]
-    uploads_path: NotRequired[str | None]
-    outputs_path: NotRequired[str | None]
-
-
-class ViewedImageData(TypedDict):
-    base64: str
-    mime_type: str
-
-
 def merge_sandbox(existing: SandboxState | None, new: SandboxState | None) -> SandboxState | None:
     """Reducer for sandbox state - accepts idempotent writes only.
 
@@ -44,6 +33,17 @@ def merge_sandbox(existing: SandboxState | None, new: SandboxState | None) -> Sa
 
 
 SandboxStateField = Annotated[NotRequired[SandboxState | None], merge_sandbox]
+
+
+class ThreadDataState(TypedDict):
+    workspace_path: NotRequired[str | None]
+    uploads_path: NotRequired[str | None]
+    outputs_path: NotRequired[str | None]
+
+
+class ViewedImageData(TypedDict):
+    base64: str
+    mime_type: str
 
 
 def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[str]:
