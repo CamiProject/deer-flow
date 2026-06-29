@@ -352,6 +352,7 @@ class SubagentExecutor:
         run_id: str | None = None,
         channel_user_id: str | None = None,
         deerflow_trace_id: str | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ):
         """Initialize the executor.
 
@@ -376,6 +377,8 @@ class SubagentExecutor:
                 the same run as the lead agent.
             deerflow_trace_id: DeerFlow request-level correlation id propagated
                 from the parent run for Langfuse metadata correlation.
+            runtime_context: Additional ToolRuntime.context values inherited
+                from the parent run, such as trusted SaaS tenant context.
         """
         self.config = config
         self.app_config = app_config
@@ -390,6 +393,7 @@ class SubagentExecutor:
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
         self.thread_id = thread_id
+        self.runtime_context = dict(runtime_context or {})
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
         self.user_id = user_id
@@ -673,7 +677,6 @@ class SubagentExecutor:
                 "callbacks": [collector],
                 "tags": [collector_caller],
             }
-
             # Inject tracing callbacks at the graph level so a single subagent run
             # produces one trace with all node / LLM / tool calls as child spans.
             # This mirrors the lead agent pattern: graph-level tracing paired with
@@ -704,7 +707,7 @@ class SubagentExecutor:
                 deerflow_trace_id=self.deerflow_trace_id,
             )
 
-            context: dict[str, Any] = {}
+            context: dict[str, Any] = dict(self.runtime_context)
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id

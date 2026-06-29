@@ -118,6 +118,17 @@ def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
     return raw if raw else ["values"]
 
 
+def merge_stream_modes(raw: list[str] | str | None, required: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    """Normalize stream modes and append server-required modes once."""
+    modes = list(normalize_stream_modes(raw))
+    if not required:
+        return modes
+    for mode in required:
+        if mode not in modes:
+            modes.append(mode)
+    return modes
+
+
 def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
     """Convert LangGraph Platform input format to LangChain state dict.
 
@@ -155,6 +166,7 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
 
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"
+SQL_CROSS_VALIDATION_ASSISTANT_ID = "sql-cross-validation"
 
 
 # Whitelist of run-context keys that the langgraph-compat layer forwards from
@@ -280,6 +292,25 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         runtime_context.setdefault("channel_user_id", context["channel_user_id"])
 
 
+def force_run_context_values(config: dict[str, Any], values: Mapping[str, Any] | None) -> None:
+    """Force server-owned runtime context values into configurable/context.
+
+    This is intentionally stronger than :func:`merge_run_context_overrides`.
+    It is used by dedicated server-side run profiles where caller-supplied
+    values must not weaken the profile, such as SQL cross-validation forcing
+    subagent orchestration on.
+    """
+    if not values:
+        return
+    configurable = config.setdefault("configurable", {})
+    runtime_context = config.setdefault("context", {})
+    for key, value in values.items():
+        if isinstance(configurable, dict):
+            configurable[key] = value
+        if isinstance(runtime_context, dict):
+            runtime_context[key] = value
+
+
 async def resolve_trusted_internal_owner_for_attribution(request: Request, owner_user_id: str | None) -> Any | None:
     """Resolve the DeerFlow user used only for trusted internal attribution."""
 
@@ -367,6 +398,11 @@ def resolve_agent_factory(assistant_id: str | None):
     same factory; the routing happens inside ``make_lead_agent`` when it reads
     ``cfg["agent_name"]``.
     """
+    if assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID:
+        from deerflow.agents.sql_cross_validation import make_sql_cross_validation_agent
+
+        return make_sql_cross_validation_agent
+
     from deerflow.agents.lead_agent.agent import make_lead_agent
 
     return make_lead_agent
@@ -501,8 +537,7 @@ def build_run_config(
         config["configurable"] = {"thread_id": thread_id}
 
     # Inject custom agent name when the caller specified a non-default assistant.
-    # Honour an explicit agent_name in either runtime options container.
-    if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+    if assistant_id and assistant_id not in {_DEFAULT_ASSISTANT_ID, SQL_CROSS_VALIDATION_ASSISTANT_ID}:
         normalized = assistant_id.strip().lower().replace("_", "-")
         if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
             raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")
@@ -592,6 +627,10 @@ async def start_run(
     body: Any,
     thread_id: str,
     request: Request,
+    *,
+    assistant_id_override: str | None = None,
+    context_overrides: Mapping[str, Any] | None = None,
+    required_stream_modes: list[str] | tuple[str, ...] | None = None,
 ) -> RunRecord:
     """Create a RunRecord and launch the background agent task.
 
@@ -611,7 +650,10 @@ async def start_run(
 
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
-    body_context = getattr(body, "context", None) or {}
+    effective_assistant_id = assistant_id_override if assistant_id_override is not None else body.assistant_id
+    body_context = dict(getattr(body, "context", None) or {})
+    if context_overrides:
+        body_context.update(context_overrides)
     model_name = body_context.get("model_name")
 
     # Coerce non-string model_name values to str before truncation.
@@ -658,9 +700,12 @@ async def start_run(
             async with goal_thread_lock(thread_id):
                 record = await run_mgr.create_or_reject(
                     thread_id,
-                    body.assistant_id,
+                    effective_assistant_id,
                     on_disconnect=disconnect,
-                    metadata=body.metadata or {},
+                    metadata={
+                        **(body.metadata or {}),
+                        **({"run_profile": SQL_CROSS_VALIDATION_ASSISTANT_ID} if effective_assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID else {}),
+                    },
                     # Persist a secret-redacted copy of the config: the run record is
                     # written to runs.kwargs_json and echoed by the run API, so a
                     # request-scoped secret (#3861) must not ride along. The live
@@ -689,7 +734,7 @@ async def start_run(
             if existing is None:
                 await run_ctx.thread_store.create(
                     thread_id,
-                    assistant_id=body.assistant_id,
+                    assistant_id=effective_assistant_id,
                     metadata=body.metadata,
                 )
             else:
@@ -697,13 +742,13 @@ async def start_run(
         except Exception:
             logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
-        agent_factory = resolve_agent_factory(body.assistant_id)
+        agent_factory = resolve_agent_factory(effective_assistant_id)
         command = getattr(body, "command", None)
         if command and command.get("resume") is not None:
             graph_input = Command(resume=command["resume"])
         else:
             graph_input = normalize_input(body.input)
-        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
+        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=effective_assistant_id)
         await apply_checkpoint_to_run_config(config, body=body, thread_id=thread_id, request=request)
 
         # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.
@@ -711,7 +756,8 @@ async def start_run(
         # that carries agent configuration (model_name, thinking_enabled, etc.).
         # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
         is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
-        merge_run_context_overrides(config, getattr(body, "context", None), internal=is_internal_caller)
+        merge_run_context_overrides(config, body_context, internal=is_internal_caller)
+        force_run_context_values(config, context_overrides)
         if not is_internal_caller:
             # ``body.config`` is free-form and copied verbatim by
             # ``build_run_config``; scrub internal-only keys smuggled there.
@@ -720,7 +766,7 @@ async def start_run(
         inject_authenticated_user_context(config, request, internal_owner_user=internal_owner_user)
         inject_trusted_saas_context(config, request, owner_user_id=owner_user_id)
 
-        stream_modes = normalize_stream_modes(body.stream_mode)
+        stream_modes = merge_stream_modes(body.stream_mode, required_stream_modes)
 
         task = asyncio.create_task(
             run_agent(

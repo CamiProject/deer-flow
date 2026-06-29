@@ -78,6 +78,14 @@ def test_normalize_stream_modes_empty_list():
     assert normalize_stream_modes([]) == ["values"]
 
 
+def test_merge_stream_modes_appends_required_modes_once():
+    from app.gateway.services import merge_stream_modes
+
+    assert merge_stream_modes("messages-tuple", ["custom"]) == ["messages-tuple", "custom"]
+    assert merge_stream_modes(["values", "custom"], ["custom"]) == ["values", "custom"]
+    assert merge_stream_modes(None, ["custom"]) == ["values", "custom"]
+
+
 def test_normalize_input_none():
     from app.gateway.services import normalize_input
 
@@ -397,6 +405,13 @@ def test_resolve_agent_factory_returns_make_lead_agent():
     assert resolve_agent_factory("custom-agent-123") is make_lead_agent
 
 
+def test_resolve_agent_factory_returns_sql_cross_validation_factory():
+    from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, resolve_agent_factory
+    from deerflow.agents.sql_cross_validation import make_sql_cross_validation_agent
+
+    assert resolve_agent_factory(SQL_CROSS_VALIDATION_ASSISTANT_ID) is make_sql_cross_validation_agent
+
+
 def test_build_run_config_configurable_custom_agent_dual_writes_agent_name():
     """Regression for issue #3549: even when the caller uses the legacy
     ``configurable`` path, ``agent_name`` must also land in
@@ -468,6 +483,15 @@ def test_non_interactive_context_override_honored_for_internal_caller():
     assert config["configurable"]["non_interactive"] is True
     assert config["context"]["non_interactive"] is True
     assert config["configurable"]["model_name"] == "gpt"
+
+
+def test_build_run_config_sql_cross_validation_does_not_inject_agent_name():
+    from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, build_run_config
+
+    config = build_run_config("thread-1", None, None, assistant_id=SQL_CROSS_VALIDATION_ASSISTANT_ID)
+
+    assert "agent_name" not in config["configurable"]
+    assert "run_name" not in config
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +718,24 @@ def test_merge_run_context_overrides_context_only_keys_do_not_override_existing(
     merge_run_context_overrides(config, {"github_token": "attacker-supplied"})
 
     assert config["context"]["github_token"] == "pre-existing"
+
+
+def test_force_run_context_values_overrides_configurable_and_context():
+    from app.gateway.services import build_run_config, force_run_context_values
+
+    config = build_run_config(
+        "thread-1",
+        {"configurable": {"subagent_enabled": False, "max_concurrent_subagents": 4}},
+        None,
+    )
+    config["context"] = {"subagent_enabled": False, "max_concurrent_subagents": 4}
+
+    force_run_context_values(config, {"subagent_enabled": True, "max_concurrent_subagents": 2})
+
+    assert config["configurable"]["subagent_enabled"] is True
+    assert config["configurable"]["max_concurrent_subagents"] == 2
+    assert config["context"]["subagent_enabled"] is True
+    assert config["context"]["max_concurrent_subagents"] == 2
 
 
 def test_context_does_not_override_existing_configurable():
@@ -1114,6 +1156,83 @@ def test_start_run_stamps_internal_owner_guardrail_attribution(_stub_app_config)
     assert context["user_role"] == "user"
     assert context["oauth_provider"] == "keycloak"
     assert context["oauth_id"] == "subject-123"
+
+
+def test_start_run_sql_cross_validation_forces_profile_context_and_stream_modes(_stub_app_config):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, start_run
+    from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    async def _scenario():
+        run_store = MemoryRunStore()
+        thread_store = MemoryThreadMetaStore(InMemoryStore())
+        run_manager = RunManager(store=run_store)
+        state = SimpleNamespace(
+            stream_bridge=SimpleNamespace(),
+            run_manager=run_manager,
+            checkpointer=InMemorySaver(),
+            store=InMemoryStore(),
+            run_event_store=SimpleNamespace(),
+            run_events_config=None,
+            thread_store=thread_store,
+        )
+        request = SimpleNamespace(
+            headers={},
+            state=SimpleNamespace(user=None),
+            app=SimpleNamespace(state=state),
+        )
+        body = SimpleNamespace(
+            assistant_id="caller-agent",
+            input={"messages": [{"role": "human", "content": "hi"}]},
+            metadata={},
+            config={"configurable": {"subagent_enabled": False, "max_concurrent_subagents": 9}},
+            context={"subagent_enabled": False, "max_concurrent_subagents": 9},
+            on_disconnect="cancel",
+            multitask_strategy="reject",
+            stream_mode="messages-tuple",
+            stream_subgraphs=False,
+            interrupt_before=None,
+            interrupt_after=None,
+        )
+        captured: dict[str, object] = {}
+
+        async def fake_run_agent(*args, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+            patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+        ):
+            record = await start_run(
+                body,
+                "thread-1",
+                request,
+                assistant_id_override=SQL_CROSS_VALIDATION_ASSISTANT_ID,
+                context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 2},
+                required_stream_modes=["custom"],
+            )
+            await record.task
+
+        return record, captured
+
+    record, captured = asyncio.run(_scenario())
+
+    assert record.assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID
+    assert record.metadata["run_profile"] == SQL_CROSS_VALIDATION_ASSISTANT_ID
+    assert captured["stream_modes"] == ["messages-tuple", "custom"]
+    config = captured["config"]
+    assert config["configurable"]["subagent_enabled"] is True
+    assert config["configurable"]["max_concurrent_subagents"] == 2
+    assert config["context"]["subagent_enabled"] is True
+    assert config["context"]["max_concurrent_subagents"] == 2
 
 
 def test_launch_scheduled_thread_run_marks_context_non_interactive(_stub_app_config):

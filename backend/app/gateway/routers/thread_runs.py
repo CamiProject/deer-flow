@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_checkpointer, get_current_user, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
-from app.gateway.services import sse_consumer, start_run, wait_for_run_completion
+from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, sse_consumer, start_run, wait_for_run_completion
 from deerflow.runtime import RunRecord, RunStatus, serialize_channel_values_for_api
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY, get_original_user_content_text, message_to_text
 from deerflow.workspace_changes import get_workspace_changes_response
@@ -446,6 +446,67 @@ async def stream_run(thread_id: str, body: RunCreateRequest, request: Request) -
             "Content-Location": f"/api/threads/{thread_id}/runs/{record.run_id}",
         },
     )
+
+
+@router.post("/{thread_id}/runs/sql-cross-validate/stream")
+@require_permission("runs", "create", owner_check=True, require_existing=True)
+async def stream_sql_cross_validate_run(thread_id: str, body: RunCreateRequest, request: Request) -> StreamingResponse:
+    """Create a deterministic SQL cross-validation run and stream events via SSE."""
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    record = await start_run(
+        body,
+        thread_id,
+        request,
+        assistant_id_override=SQL_CROSS_VALIDATION_ASSISTANT_ID,
+        context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 2},
+        required_stream_modes=["custom"],
+    )
+
+    return StreamingResponse(
+        sse_consumer(bridge, record, request, run_mgr),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Content-Location": f"/api/threads/{thread_id}/runs/{record.run_id}",
+        },
+    )
+
+
+@router.post("/{thread_id}/runs/sql-cross-validate/wait", response_model=dict)
+@require_permission("runs", "create", owner_check=True, require_existing=True)
+async def wait_sql_cross_validate_run(thread_id: str, body: RunCreateRequest, request: Request) -> dict:
+    """Create a deterministic SQL cross-validation run and wait for completion."""
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    record = await start_run(
+        body,
+        thread_id,
+        request,
+        assistant_id_override=SQL_CROSS_VALIDATION_ASSISTANT_ID,
+        context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 2},
+        required_stream_modes=["custom"],
+    )
+
+    completed = True
+    if record.task is not None:
+        completed = await wait_for_run_completion(bridge, record, request, run_mgr)
+
+    if completed:
+        checkpointer = get_checkpointer(request)
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint_tuple = await checkpointer.aget_tuple(config)
+            if checkpoint_tuple is not None:
+                checkpoint = getattr(checkpoint_tuple, "checkpoint", {}) or {}
+                channel_values = checkpoint.get("channel_values", {})
+                return serialize_channel_values_for_api(channel_values)
+        except Exception:
+            logger.exception("Failed to fetch final state for run %s", record.run_id)
+
+    return {"status": record.status.value, "error": record.error}
 
 
 @router.post("/{thread_id}/runs/wait", response_model=dict)

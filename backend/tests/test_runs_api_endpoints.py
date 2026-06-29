@@ -48,6 +48,46 @@ def _make_message(seq: int) -> dict:
     return {"seq": seq, "event_type": "on_chat_model_stream", "category": "message", "content": f"msg-{seq}"}
 
 
+def test_stateless_sql_cross_validate_stream_forces_profile(monkeypatch):
+    """The stateless SQL endpoint must force the cross-validation run profile."""
+    from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID
+
+    app = _make_app()
+    app.state.stream_bridge = MagicMock()
+    app.state.run_manager = MagicMock()
+    calls = {}
+
+    async def fake_start_run(body, thread_id, request, **kwargs):
+        calls["body"] = body
+        calls["thread_id"] = thread_id
+        calls["kwargs"] = kwargs
+        return type("Record", (), {"run_id": "run-1", "thread_id": thread_id, "status": None, "on_disconnect": None})()
+
+    async def fake_sse_consumer(*_args, **_kwargs):
+        yield "event: end\ndata: null\n\n"
+
+    monkeypatch.setattr(runs, "start_run", fake_start_run)
+    monkeypatch.setattr(runs, "sse_consumer", fake_sse_consumer)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs/sql-cross-validate/stream",
+            json={
+                "assistant_id": "malicious-agent",
+                "input": {"messages": [{"role": "user", "content": "查用电量"}]},
+                "stream_mode": "messages-tuple",
+                "context": {"subagent_enabled": False, "max_concurrent_subagents": 4},
+                "config": {"configurable": {"thread_id": "thread-1"}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls["thread_id"] == "thread-1"
+    assert calls["kwargs"]["assistant_id_override"] == SQL_CROSS_VALIDATION_ASSISTANT_ID
+    assert calls["kwargs"]["context_overrides"] == {"subagent_enabled": True, "max_concurrent_subagents": 2}
+    assert calls["kwargs"]["required_stream_modes"] == ["custom"]
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
