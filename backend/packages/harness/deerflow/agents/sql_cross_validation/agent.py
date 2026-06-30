@@ -116,6 +116,11 @@ def _final_answer(question: str, primary: _SqlAgentRun, verifier: _SqlAgentRun) 
 def _summary_prompt(question: str, primary: _SqlAgentRun, verifier: _SqlAgentRun) -> str:
     return f"""你是 SQL 问数交叉验证的最终汇总器。你只能基于下面两个子 Agent 的最终输出做比对和总结，不要生成或执行新的 SQL。
 
+角色约定：
+- subAgent 名称表达能力域，不表达它在本次 run 中的最终运行角色。
+- `general-purpose` 在本 profile 中是 primary execution / 主查询角色。
+- `mysql-query` 在本 profile 中是 domain validation / 领域验证角色。
+
 用户问题：
 {question or "未能识别用户问题"}
 
@@ -164,7 +169,9 @@ async def _summarize_final_answer(
 
 
 def _primary_prompt(question: str) -> str:
-    return f"""你是 SQL 问数主查询 Agent。请独立完成用户问题，不要依赖任何验证 Agent。
+    return f"""你正在 sql-cross-validation run profile 中执行 primary execution / 主查询角色。
+你的底层 subAgent 类型是 general-purpose；该名称表示通用任务执行能力，不表示你可以使用非 SQL 工具。
+在本 profile 中，你被限制为 SQL 主查询 Agent。请独立完成用户问题，不要依赖任何验证 Agent。
 
 用户问题：
 {question}
@@ -180,7 +187,9 @@ def _primary_prompt(question: str) -> str:
 
 
 def _verifier_prompt(question: str) -> str:
-    return f"""你是 SQL 问数交叉验证 Agent。请独立理解并验证用户问题，不要假设主查询 Agent 的结论正确。
+    return f"""你正在 sql-cross-validation run profile 中执行 domain validation / 领域验证角色。
+你的底层 subAgent 类型是 mysql-query；该名称表示 MySQL 查询能力域，不表示普通主查询角色。
+在本 profile 中，你被指定为 SQL 交叉验证 Agent。请独立理解并验证用户问题，不要假设主查询 Agent 的结论正确。
 
 用户问题：
 {question}
