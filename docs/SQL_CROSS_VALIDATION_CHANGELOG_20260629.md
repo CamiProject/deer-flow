@@ -6,6 +6,26 @@
 **提交标题**: `SQL问数subAgent交叉验证接口按照规划开发`  
 **关联规划**: `SQL 问数交叉验证接口规划`
 
+## 2026-07-06 Security Update
+
+SaaS asking-data flows must use only the dedicated SQL cross-validation endpoints:
+
+```text
+POST /api/threads/{thread_id}/runs/sql-cross-validate/stream
+POST /api/threads/{thread_id}/runs/sql-cross-validate/wait
+POST /api/runs/sql-cross-validate/stream
+POST /api/runs/sql-cross-validate/wait
+```
+
+The cross-validation role assignment has changed:
+
+| Runtime role | Previous subAgent | Current subAgent | Tool scope |
+| --- | --- | --- | --- |
+| Primary execution / main query | `general-purpose` | `mysql-query` | SQL tools only |
+| Domain validation / cross-check | `mysql-query` | `mysql-validator` | SQL tools only |
+
+`general-purpose` remains for ordinary non-SQL work, but it is no longer used by the SQL cross-validation profile. This keeps SaaS asking-data execution away from inherited general tools such as bash, file, workspace, sandbox, or code-execution capabilities, and removes the normal tool path for reading `.env` or process environment secrets.
+
 ## 结论
 
 本次改动已经基本实现规划中的 v1 需求：DeerFlow 新增了专用 SQL 问数交叉验证入口，调用该入口时不再由 Lead Agent 自行决定是否派生 subAgent，而是由后端固定编排两个 SQL subAgent 并发查询：

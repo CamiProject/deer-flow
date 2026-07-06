@@ -128,7 +128,7 @@ async def test_sql_cross_validation_runs_exactly_two_subagents(monkeypatch, sql_
     result = await module._cross_validate_node(state, config)
 
     assert len(calls) == 2
-    assert [call["kwargs"]["config"].name for call in calls] == ["general-purpose", "mysql-query"]
+    assert [call["kwargs"]["config"].name for call in calls] == ["mysql-query", "mysql-validator"]
     assert all([tool.name for tool in call["kwargs"]["tools"]] == [tool.name for tool in module.SQL_TOOLS] for call in calls)
     assert all(call["kwargs"]["parent_model"] == "model-a" for call in calls)
     assert all(call["kwargs"]["thread_id"] == "thread-1" for call in calls)
@@ -140,8 +140,8 @@ async def test_sql_cross_validation_runs_exactly_two_subagents(monkeypatch, sql_
     assert len(journal.records) == 2
     final = result["messages"][0].content
     assert "SQL 问数交叉验证结果" in final
-    assert "general-purpose result" in final
     assert "mysql-query result" in final
+    assert "mysql-validator result" in final
 
 
 def test_sql_cross_validation_final_answer_marks_single_side_failure(sql_module):
@@ -150,7 +150,7 @@ def test_sql_cross_validation_final_answer_marks_single_side_failure(sql_module)
 
     primary = _SqlAgentRun(
         role="主查询",
-        subagent_type="general-purpose",
+        subagent_type="mysql-query",
         result=FakeSubagentResult(
             task_id="p",
             trace_id="t",
@@ -160,7 +160,7 @@ def test_sql_cross_validation_final_answer_marks_single_side_failure(sql_module)
     )
     verifier = _SqlAgentRun(
         role="交叉验证",
-        subagent_type="mysql-query",
+        subagent_type="mysql-validator",
         result=FakeSubagentResult(
             task_id="v",
             trace_id="t",
@@ -182,12 +182,12 @@ def test_sql_cross_validation_final_answer_marks_double_failure(sql_module):
 
     primary = _SqlAgentRun(
         role="主查询",
-        subagent_type="general-purpose",
+        subagent_type="mysql-query",
         result=FakeSubagentResult(task_id="p", trace_id="t", status=FakeSubagentStatus.FAILED, error="primary failed"),
     )
     verifier = _SqlAgentRun(
         role="交叉验证",
-        subagent_type="mysql-query",
+        subagent_type="mysql-validator",
         result=FakeSubagentResult(task_id="v", trace_id="t", status=FakeSubagentStatus.FAILED, error="verifier failed"),
     )
 
@@ -210,12 +210,12 @@ async def test_sql_cross_validation_uses_summary_model_when_available(monkeypatc
 
     primary = module._SqlAgentRun(
         role="主查询",
-        subagent_type="general-purpose",
+        subagent_type="mysql-query",
         result=FakeSubagentResult(task_id="p", trace_id="t", status=FakeSubagentStatus.COMPLETED, result="primary sql result"),
     )
     verifier = module._SqlAgentRun(
         role="交叉验证",
-        subagent_type="mysql-query",
+        subagent_type="mysql-validator",
         result=FakeSubagentResult(task_id="v", trace_id="t", status=FakeSubagentStatus.COMPLETED, result="verifier sql result"),
     )
     monkeypatch.setattr(module, "create_chat_model", lambda **_kwargs: DummyModel())

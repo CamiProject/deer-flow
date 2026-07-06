@@ -509,6 +509,23 @@ class TestRegistryAvailableNames:
         names = get_subagent_names()
         assert "general-purpose" in names
         assert "bash" in names
+        assert "mysql-query" in names
+        assert "mysql-validator" in names
+
+    def test_mysql_validator_builtin_is_sql_only(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        _reset_subagents_config()
+        config = get_subagent_config("mysql-validator")
+        assert config is not None
+        assert config.tools == [
+            "sql_show_databases",
+            "sql_list_tables",
+            "sql_schema",
+            "sql_query",
+            "sql_query_checker",
+        ]
+        assert config.disallowed_tools == ["task", "ask_clarification", "present_files"]
 
     def test_includes_custom_names(self):
         from deerflow.subagents.registry import get_subagent_names

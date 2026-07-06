@@ -22,8 +22,8 @@ from deerflow.tools.builtins.sql_tools import SQL_TOOLS
 
 logger = logging.getLogger(__name__)
 
-_PRIMARY_AGENT = "general-purpose"
-_VERIFIER_AGENT = "mysql-query"
+_PRIMARY_AGENT = "mysql-query"
+_VERIFIER_AGENT = "mysql-validator"
 _RUN_PROFILE = "sql-cross-validation"
 
 
@@ -118,8 +118,8 @@ def _summary_prompt(question: str, primary: _SqlAgentRun, verifier: _SqlAgentRun
 
 角色约定：
 - subAgent 名称表达能力域，不表达它在本次 run 中的最终运行角色。
-- `general-purpose` 在本 profile 中是 primary execution / 主查询角色。
-- `mysql-query` 在本 profile 中是 domain validation / 领域验证角色。
+- `mysql-query` 在本 profile 中是 primary execution / 主查询角色。
+- `mysql-validator` 在本 profile 中是 domain validation / 领域验证角色。
 
 用户问题：
 {question or "未能识别用户问题"}
@@ -170,7 +170,7 @@ async def _summarize_final_answer(
 
 def _primary_prompt(question: str) -> str:
     return f"""你正在 sql-cross-validation run profile 中执行 primary execution / 主查询角色。
-你的底层 subAgent 类型是 general-purpose；该名称表示通用任务执行能力，不表示你可以使用非 SQL 工具。
+你的底层 subAgent 类型是 mysql-query；该名称表示 MySQL 查询能力域，不表示你可以使用非 SQL 工具。
 在本 profile 中，你被限制为 SQL 主查询 Agent。请独立完成用户问题，不要依赖任何验证 Agent。
 
 用户问题：
@@ -188,7 +188,7 @@ def _primary_prompt(question: str) -> str:
 
 def _verifier_prompt(question: str) -> str:
     return f"""你正在 sql-cross-validation run profile 中执行 domain validation / 领域验证角色。
-你的底层 subAgent 类型是 mysql-query；该名称表示 MySQL 查询能力域，不表示普通主查询角色。
+你的底层 subAgent 类型是 mysql-validator；该名称表示 MySQL 验证能力域，不表示普通主查询角色。
 在本 profile 中，你被指定为 SQL 交叉验证 Agent。请独立理解并验证用户问题，不要假设主查询 Agent 的结论正确。
 
 用户问题：

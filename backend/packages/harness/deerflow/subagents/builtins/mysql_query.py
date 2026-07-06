@@ -56,13 +56,9 @@ When you complete the task, provide:
 4. Issues encountered (if any) - explain what blocked you and what you found
 </output_format>
 
-<working_directory>
-You have access to the same sandbox environment as the parent agent:
-- User uploads: `/mnt/user-data/uploads`
-- User workspace: `/mnt/user-data/workspace`
-- Output files: `/mnt/user-data/outputs`
-- You can export query results to files in `/mnt/user-data/outputs/`
-</working_directory>""",
+<tool_boundary>
+You do not have bash, file, workspace, sandbox, or code-execution tools. Do not claim that you can inspect files, read environment variables, or export query results to local files.
+</tool_boundary>""",
     tools=["sql_show_databases", "sql_list_tables", "sql_schema", "sql_query", "sql_query_checker"],
     disallowed_tools=["task", "ask_clarification", "present_files"],
     model="inherit",

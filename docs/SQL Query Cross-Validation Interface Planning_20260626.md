@@ -1,6 +1,26 @@
 # SQL 问数交叉验证接口规划
 
 ## Summary
+
+### 2026-07-06 Security Update
+
+This plan has been tightened for SaaS question-answering safety. The dedicated SQL cross-validation endpoints remain the only recommended DeerFlow entrypoints for SaaS asking-data flows:
+
+```text
+POST /api/threads/{thread_id}/runs/sql-cross-validate/stream
+POST /api/threads/{thread_id}/runs/sql-cross-validate/wait
+POST /api/runs/sql-cross-validate/stream
+POST /api/runs/sql-cross-validate/wait
+```
+
+The role assignment is superseded as follows:
+
+| Runtime role | SubAgent | Tool scope |
+| --- | --- | --- |
+| Primary execution / main query | `mysql-query` | SQL tools only |
+| Domain validation / cross-check | `mysql-validator` | SQL tools only |
+
+`general-purpose` remains available for ordinary non-SQL tasks, but it must not participate in SaaS asking-data flows. The SQL cross-validation profile must not use `bash`, file, workspace, sandbox, code-execution, or general-purpose delegated tools, so it has no normal tool path to read `.env` or process environment secrets.
 - 你的方向合理：问数交叉验证不应只靠 `mysql-query` skill/prompt，而应新增一个专用运行入口，由后端强制编排两个 subAgent。
 - v1 目标：新增一个面向智能问数的 `stream/wait` 兼容接口，内部固定并发启动 2 个 SQL subAgent：`general-purpose` 执行主查询，`mysql-query` 做独立交叉验证。
 - 关键修正：不要让 Lead Agent 自己决定是否派生两个 subAgent；新增 deterministic SQL cross-validation run profile/agent factory，保证每次请求都启动这两个角色。
