@@ -70,7 +70,7 @@ def _query_conf_database(database_code: str) -> dict[str, str]:
     db = SQLDatabase.from_uri(_config_db_uri(), sample_rows_in_table_info=0)
     escaped = database_code.replace("'", "''")
     result = db.run(
-        "SELECT code, url, userName, password, driverClass "
+        "SELECT code, url, user_name, password, driver_class "
         f"FROM conf_database WHERE code = '{escaped}' LIMIT 1"
     )
     rows = _parse_sql_database_result(result)
@@ -80,9 +80,9 @@ def _query_conf_database(database_code: str) -> dict[str, str]:
     return {
         "code": str(row[0] or ""),
         "url": str(row[1] or ""),
-        "userName": str(row[2] or ""),
+        "user_name": str(row[2] or ""),
         "password": str(row[3] or ""),
-        "driverClass": str(row[4] or ""),
+        "driver_class": str(row[4] or ""),
     }
 
 
@@ -139,9 +139,9 @@ def _resolve_by_code(database_code: str) -> TenantDataSource:
         host=host,
         port=port,
         database=database,
-        username=row["userName"],
+        username=row["user_name"],
         password=decrypt_password(row["password"]),
-        driver_class=row["driverClass"],
+        driver_class=row["driver_class"],
         allowed_databases=(database,),
     )
 

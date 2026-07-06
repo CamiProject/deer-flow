@@ -72,6 +72,41 @@ def test_build_database_code_rejects_unsafe_identifiers():
         build_database_code(ctx)
 
 
+def test_resolve_tenant_datasource_queries_snake_case_conf_database_columns(monkeypatch):
+    from deerflow.tools.builtins import tenant_datasource
+
+    captured = {}
+    db = MagicMock()
+    db.run.return_value = (
+        "[('carbon_client_efficiency_20251231184555_6', "
+        "'jdbc:mysql://127.0.0.1:3306/carbon_client_efficiency_20251231184555_6', "
+        "'readonly', 'secret', 'com.mysql.cj.jdbc.Driver')]"
+    )
+
+    def fake_from_uri(uri: str, sample_rows_in_table_info: int = 3):
+        captured["uri"] = uri
+        captured["sample_rows_in_table_info"] = sample_rows_in_table_info
+        return db
+
+    monkeypatch.setenv("SAAS_CONFIG_DB_HOST", "config-db")
+    monkeypatch.setenv("SAAS_CONFIG_DB_PORT", "3306")
+    monkeypatch.setenv("SAAS_CONFIG_DB_USER", "config_user")
+    monkeypatch.setenv("SAAS_CONFIG_DB_PASSWORD", "config_password")
+    monkeypatch.setenv("SAAS_CONFIG_DB_DATABASE", "config")
+    monkeypatch.setattr(tenant_datasource.SQLDatabase, "from_uri", fake_from_uri)
+    tenant_datasource._resolve_by_code.cache_clear()
+
+    ds = tenant_datasource._resolve_by_code(TENANT_DB)
+
+    assert "user_name" in db.run.call_args.args[0]
+    assert "driver_class" in db.run.call_args.args[0]
+    assert "userName" not in db.run.call_args.args[0]
+    assert "driverClass" not in db.run.call_args.args[0]
+    assert captured["sample_rows_in_table_info"] == 0
+    assert ds.username == "readonly"
+    assert ds.driver_class == "com.mysql.cj.jdbc.Driver"
+
+
 def test_get_db_without_tenant_context_uses_local_mysql(monkeypatch):
     from deerflow.tools.builtins import sql_tools
 
