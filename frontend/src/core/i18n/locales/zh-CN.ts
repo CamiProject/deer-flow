@@ -1,7 +1,6 @@
 import {
   BarChartIcon,
   CompassIcon,
-  GraduationCapIcon,
   ImageIcon,
   MicroscopeIcon,
   PenLineIcon,

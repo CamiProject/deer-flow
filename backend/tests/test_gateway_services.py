@@ -1395,7 +1395,7 @@ def test_build_run_config_strips_protected_saas_context_keys():
         None,
     )
 
-    assert config["context"] == {"agent_name": "allowed-agent"}
+    assert config["context"] == {"agent_name": "allowed-agent", "thread_id": "thread-1"}
 
 
 def test_build_run_config_strips_protected_saas_configurable_keys():
