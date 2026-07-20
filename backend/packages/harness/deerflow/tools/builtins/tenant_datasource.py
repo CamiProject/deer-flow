@@ -68,10 +68,10 @@ def _config_db_uri() -> str:
 
 def _query_conf_database(database_code: str) -> dict[str, str]:
     db = SQLDatabase.from_uri(_config_db_uri(), sample_rows_in_table_info=0)
-    escaped = database_code.replace("'", "''")
     result = db.run(
-        "SELECT code, url, user_name, password, driver_class "
-        f"FROM conf_database WHERE code = '{escaped}' LIMIT 1"
+        "SELECT code, url, user_name, password, driver_class FROM conf_database WHERE code = :database_code LIMIT 1",
+        parameters={"database_code": database_code},
+        execution_options={"timeout": 10},
     )
     rows = _parse_sql_database_result(result)
     if not rows:
@@ -116,6 +116,8 @@ def _parse_jdbc_mysql_url(url: str) -> tuple[str, int, str]:
     parsed = urlparse(raw)
     if parsed.scheme not in {"mysql", "mysql+mysqlconnector"}:
         raise TenantDataSourceError(f"Unsupported datasource URL scheme: {parsed.scheme!r}")
+    if parsed.username is not None or parsed.password is not None:
+        raise TenantDataSourceError("Datasource URL must not embed credentials")
     host = parsed.hostname
     if not host:
         raise TenantDataSourceError("Datasource URL is missing host")
@@ -125,6 +127,8 @@ def _parse_jdbc_mysql_url(url: str) -> tuple[str, int, str]:
         database = query_db.strip()
     if not database:
         raise TenantDataSourceError("Datasource URL is missing database")
+    if not _SAFE_IDENTIFIER_RE.fullmatch(database):
+        raise TenantDataSourceError("Datasource URL contains an unsafe database name")
     return host, parsed.port or 3306, database
 
 

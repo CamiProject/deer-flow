@@ -37,6 +37,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.0.3",
     "langgraph-sdk>=0.1.51",
     "sqlalchemy[asyncio]>=2.0,<3.0",
+    "sqlglot>=27.0,<28.0",
     "aiosqlite>=0.19",
     "alembic>=1.13",
     "cryptography>=48.0.1",

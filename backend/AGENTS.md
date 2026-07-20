@@ -8,6 +8,8 @@ DeerFlow is a LangGraph-based AI super agent system with a full-stack architectu
 
 **Architecture**:
 - **Gateway API** (port 8001): REST API plus embedded LangGraph-compatible agent runtime
+- **Semantic API** (port 8003, internal only): Ontology/OAG, scoped semantic query, policy, Action proposal/approval orchestration, and semantic audit
+- **Action Worker** (no public port): isolated domain-write executor and the only semantic component that receives write credentials
 - **Frontend** (port 3000): Next.js web interface
 - **Nginx** (port 2026): Unified reverse proxy entry point
 - **Provisioner** (port 8002, optional in Docker dev): Started only when sandbox is configured for provisioner/Kubernetes mode
@@ -296,6 +298,49 @@ Configuration priority:
 2. `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable
 3. `extensions_config.json` in current directory (backend/)
 4. `extensions_config.json` in parent directory (project root - **recommended location**)
+
+### SaaS Scoped Query, Semantic Platform, and Actions
+
+The production SaaS data entry is the dedicated `saas-query` run profile exposed at
+`/api/runs/saas-query/{stream,wait}` and the equivalent threaded routes. It must not
+reuse Lead Agent or `general-purpose`. Gateway verifies the internal caller and a
+short-lived signed `X-SaaS-Authorization-Context`, strips client-forged protected
+context, binds thread history to principal/tenant/system/scope/version, and keeps the
+raw JWT in runtime-only secret context.
+
+The A-phase safety kernel lives in:
+
+- `packages/harness/deerflow/runtime/authorization_context.py`
+- `packages/harness/deerflow/semantic/sql_scope.py`
+- `packages/harness/deerflow/tools/builtins/sql_tools.py`
+- `packages/harness/deerflow/tools/builtins/tenant_datasource.py`
+
+It uses a versioned table/field policy plus `sqlglot` AST rewriting. Unknown tables
+fail closed; scoped tables receive bind-parameter predicates across joins, CTEs,
+subqueries, and UNION branches. SaaS schema tools return no sample rows. Never replace
+this enforcement with prompt instructions.
+
+The B-phase services live in `app/semantic/` and the harness-side semantic client/tools
+live in `packages/harness/deerflow/semantic/` and
+`packages/harness/deerflow/tools/builtins/semantic_tools.py`. Semantic API independently
+verifies the original SaaS JWT and service token. A `scope_ref` resolver may only return
+a signed `resource_set`; it cannot upgrade the caller to `tenant_all`.
+
+Action proposals, executions, and state transitions are durable. The Worker revalidates
+IAM scope, roles, Action version, target visibility/version, and preconditions before
+calling a versioned SaaS domain API. Optional compensation runs only when explicitly
+declared in Ontology and uses a separate idempotency key. Gateway and Semantic API must
+not receive `DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN` or
+`DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN`; local launch and both Compose stacks also
+scrub those values from the optional sandbox provisioner and all other non-Worker
+services. Domain API paths may not be network-path references, and persisted results are
+projected through the Ontology `result_fields` allowlist.
+
+The existing `/sql-cross-validate/*` routes remain A-protected compatibility/break-glass
+paths. SQL SubAgents set `skills=[]`; semantic-mode `mysql-query` receives only Semantic
+tools and `mysql-validator` receives only `explain_metric`. Full deployment and JWT/IAM
+contracts are documented in
+[`docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md`](../docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md).
 
 ### Gateway API (`app/gateway/`)
 

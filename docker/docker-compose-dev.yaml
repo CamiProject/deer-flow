@@ -64,6 +64,9 @@ services:
       # Override K8S API server URL since kubeconfig uses 127.0.0.1
       # which is unreachable from inside the container
       - K8S_API_SERVER=https://host.docker.internal:26443
+      - DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN=
+      - DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN=
+      - SAAS_DOMAIN_API_TOKEN=
     env_file:
       - ../.env
     extra_hosts:
@@ -134,6 +137,7 @@ services:
 
   # Backend - Gateway API
   gateway:
+    image: deer-flow-backend-dev:${DEER_FLOW_IMAGE_TAG:-local}
     build:
       context: ../
       dockerfile: backend/Dockerfile
@@ -188,13 +192,18 @@ services:
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN}
+      - DEER_FLOW_SEMANTIC_API_URL=http://semantic-api:8003
+      - DEER_FLOW_SEMANTIC_SERVICE_TOKEN=${DEER_FLOW_SEMANTIC_SERVICE_TOKEN:-dev-semantic-token-change-me}
+      - DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN=
+      - DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN=
+      - SAAS_DOMAIN_API_TOKEN=
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
       # Proxy values (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are inherited from ../.env via env_file.
       # Only NO_PROXY is declared here so internal service hostnames are always exempt from the proxy.
-      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
-      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,semantic-api,frontend,nginx,provisioner,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,semantic-api,frontend,nginx,provisioner,host.docker.internal
     env_file:
       - ../.env
     extra_hosts:
@@ -202,6 +211,70 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       redis:
+        condition: service_healthy
+      semantic-api:
+        condition: service_healthy
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+
+  # Internal Semantic Platform API
+  semantic-api:
+    image: deer-flow-backend-dev:${DEER_FLOW_IMAGE_TAG:-local}
+    container_name: deer-flow-semantic-api
+    command: sh -c "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.semantic.api:create_app --factory --host 0.0.0.0 --port 8003 --reload"
+    volumes:
+      - ../backend/:/app/backend/
+      - gateway-venv:/app/backend/.venv
+      - semantic-data:/var/lib/deerflow-semantic
+    working_dir: /app
+    environment:
+      - CI=true
+      - DEER_FLOW_SEMANTIC_DATABASE_URL=sqlite+aiosqlite:////var/lib/deerflow-semantic/semantic.db
+      - DEER_FLOW_SEMANTIC_SERVICE_TOKEN=${DEER_FLOW_SEMANTIC_SERVICE_TOKEN:-dev-semantic-token-change-me}
+      - DEER_FLOW_SEMANTIC_SCOPE_RESOLVER_TOKEN=${DEER_FLOW_SEMANTIC_SCOPE_RESOLVER_TOKEN:-}
+      - DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN=
+      - DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN=
+      - SAAS_DOMAIN_API_TOKEN=
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,semantic-api,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,semantic-api,host.docker.internal
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Isolated write worker; only this service receives write credentials.
+  action-worker:
+    image: deer-flow-backend-dev:${DEER_FLOW_IMAGE_TAG:-local}
+    container_name: deer-flow-action-worker
+    command: sh -c "cd backend && PYTHONPATH=. uv run --no-sync python -m app.semantic.worker"
+    volumes:
+      - ../backend/:/app/backend/
+      - gateway-venv:/app/backend/.venv
+      - semantic-data:/var/lib/deerflow-semantic
+    working_dir: /app
+    environment:
+      - CI=true
+      - DEER_FLOW_SEMANTIC_DATABASE_URL=sqlite+aiosqlite:////var/lib/deerflow-semantic/semantic.db
+      - DEER_FLOW_SEMANTIC_SERVICE_TOKEN=${DEER_FLOW_SEMANTIC_SERVICE_TOKEN:-dev-semantic-token-change-me}
+      - DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN=${DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN:-}
+      - DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN=${DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN:-}
+      - SAAS_DOMAIN_API_BASE_URL=${SAAS_DOMAIN_API_BASE_URL:-}
+      - SAAS_ACTION_AUTHORIZATION_REVALIDATION_URL=${SAAS_ACTION_AUTHORIZATION_REVALIDATION_URL:-}
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      semantic-api:
         condition: service_healthy
     networks:
       - deer-flow-dev
@@ -213,6 +286,7 @@ volumes:
   gateway-venv:
   gateway-uv-cache:
   redis-data:
+  semantic-data:
 
 networks:
   deer-flow-dev:

@@ -22,18 +22,24 @@ DingTalk) bridge into the same agent through the Gateway.
 
 ## Service Topology
 
-A single `make dev` / Docker stack runs four cooperating services:
+A `make dev` / Docker stack runs the core application plus internal SaaS semantic
+services when configured:
 
 | Service         | Port   | Role                                                                 |
 | --------------- | ------ | ------------------------------------------------------------------- |
 | **Nginx**       | `2026` | Unified reverse-proxy entry point — open this in the browser        |
 | **Gateway API** | `8001` | FastAPI REST API + embedded LangGraph-compatible agent runtime      |
+| **Semantic API** | `8003` | Internal-only Ontology, scoped query, policy, and Action orchestration |
+| **Action Worker** | none | Isolated approved-write executor; only this service receives write credentials |
 | **Frontend**    | `3000` | Next.js web interface                                               |
 | **Provisioner** | `8002` | Optional — only when sandbox is configured for provisioner/K8s mode |
 
 Nginx is the single public entry: it serves the frontend and proxies `/api/langgraph/*`
 to the Gateway's LangGraph runtime, rewriting it to Gateway's native `/api/*` routes; all
-other `/api/*` go straight to the Gateway REST routers. See
+other `/api/*` go straight to the Gateway REST routers. Semantic API and Action Worker
+are not exposed through nginx. Local `make dev/start` always starts Semantic API and
+starts Action Worker only when `DEER_FLOW_ACTIONS_ENABLED=true`; production Compose
+starts both internal services. See
 [backend/AGENTS.md](backend/AGENTS.md) for the runtime and router detail.
 
 ## Repository Map
@@ -46,7 +52,7 @@ deer-flow/
 ├── backend/                        # Python backend — see backend/AGENTS.md
 │   ├── Makefile                    # Per-module backend commands (dev, gateway, test, lint, migrate-rev)
 │   ├── packages/harness/           # deerflow-harness package (import: deerflow.*) — agent framework
-│   └── app/                        # FastAPI Gateway + IM channels (import: app.*)
+│   └── app/                        # FastAPI Gateway, Semantic API/Worker + IM channels (import: app.*)
 ├── frontend/                       # Next.js frontend (pnpm) — see frontend/AGENTS.md
 ├── docker/                         # docker-compose files, nginx config, provisioner
 ├── skills/                         # Agent skills: public/ (committed), custom/ (gitignored)
@@ -77,7 +83,7 @@ make support-bundle  # Generate redacted troubleshooting summary, AI issue draft
 make config      # Generate local config files from the examples
 make check       # Check that required tools are installed
 make install     # Install all dependencies (frontend + backend + pre-commit hooks)
-make dev         # Start all services with hot-reload (Gateway + Frontend + Nginx)
+make dev         # Start Gateway + Semantic API + Frontend + Nginx (optional Action Worker)
 make start       # Start all services in production mode (local, optimized)
 make stop        # Stop all running services
 make up / down   # Build/stop the production Docker stack (browser at localhost:2026)
@@ -112,6 +118,7 @@ Rule of thumb: **root `make` = the full application**; **`backend/Makefile` and 
 - Project overview & usage → **[README.md](README.md)** (translations: `README_zh.md`,
   `README_ja.md`, `README_fr.md`, `README_ru.md`)
 - Security policy → **[SECURITY.md](SECURITY.md)**
+- SaaS scoped query / Ontology / Action runtime → **[docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)**
 - Changes → **[CHANGELOG.md](CHANGELOG.md)**
 - Cutting a release → **[RELEASING.md](RELEASING.md)**
 

@@ -412,6 +412,13 @@ def test_resolve_agent_factory_returns_sql_cross_validation_factory():
     assert resolve_agent_factory(SQL_CROSS_VALIDATION_ASSISTANT_ID) is make_sql_cross_validation_agent
 
 
+def test_resolve_agent_factory_returns_saas_query_factory():
+    from app.gateway.services import SAAS_QUERY_ASSISTANT_ID, resolve_agent_factory
+    from deerflow.agents.saas_query import make_saas_query_agent
+
+    assert resolve_agent_factory(SAAS_QUERY_ASSISTANT_ID) is make_saas_query_agent
+
+
 def test_build_run_config_configurable_custom_agent_dual_writes_agent_name():
     """Regression for issue #3549: even when the caller uses the legacy
     ``configurable`` path, ``agent_name`` must also land in
@@ -997,6 +1004,208 @@ def test_inject_trusted_saas_context_overrides_spoofed_body_context():
     assert config["context"]["system_code"] == "efficiency"
 
 
+def test_inject_trusted_saas_context_forwards_raw_token_only_when_requested():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.gateway.services import inject_trusted_saas_context
+    from deerflow.runtime.authorization_context import AuthorizationContext
+    from deerflow.runtime.secret_context import SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY
+
+    authorization = AuthorizationContext.from_mapping(
+        {
+            "principal_id": "user-1",
+            "tenant_id": "tenant-1",
+            "tenant_code": "tenant-code",
+            "system_code": "efficiency",
+            "role_codes": ["site_admin"],
+            "scope_mode": "resource_set",
+            "allowed_site_ids": ["site-1"],
+            "allowed_project_ids": [],
+            "permission_version": "1",
+        }
+    )
+    request = SimpleNamespace()
+
+    with (
+        patch(
+            "app.gateway.services.get_trusted_saas_context",
+            return_value={
+                "tenant_id": "tenant-1",
+                "tenant_code": "tenant-code",
+                "system_code": "efficiency",
+            },
+        ),
+        patch(
+            "app.gateway.services.get_trusted_saas_authorization_context",
+            return_value=authorization,
+        ),
+        patch(
+            "app.gateway.services.get_trusted_saas_authorization_token",
+            return_value="raw-user-jwt",
+        ),
+    ):
+        semantic_config = {"context": {}}
+        inject_trusted_saas_context(
+            semantic_config,
+            request,
+            include_authorization_token=True,
+        )
+        sql_config = {"context": {}}
+        inject_trusted_saas_context(sql_config, request)
+
+    assert semantic_config["context"][SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] == "raw-user-jwt"
+    assert SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY not in sql_config["context"]
+
+
+def test_sql_cross_validation_break_glass_role_allowlist(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.gateway.services import enforce_sql_cross_validation_role
+
+    monkeypatch.setenv(
+        "DEER_FLOW_SQL_CROSS_VALIDATE_ALLOWED_ROLES",
+        "tenant_admin,data_engineer",
+    )
+    enforce_sql_cross_validation_role(SimpleNamespace(role_codes=("data_engineer",)))
+
+    with pytest.raises(HTTPException) as denied:
+        enforce_sql_cross_validation_role(SimpleNamespace(role_codes=("site_admin",)))
+
+    assert denied.value.status_code == 403
+
+
+def test_signed_saas_request_cannot_select_lead_agent_profile():
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app.gateway.internal_auth import (
+        INTERNAL_SYSTEM_ROLE,
+        SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME,
+    )
+    from app.gateway.services import start_run
+
+    request = SimpleNamespace(
+        headers={SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME: "signed-user-jwt"},
+        state=SimpleNamespace(
+            user=SimpleNamespace(system_role=INTERNAL_SYSTEM_ROLE),
+        ),
+    )
+    body = SimpleNamespace(assistant_id="lead_agent")
+
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(start_run(body, "thread-1", request))
+
+    assert denied.value.status_code == 403
+    assert "dedicated SaaS" in denied.value.detail
+
+
+def test_sql_cross_validation_requires_trusted_authorization_before_run_creation():
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app.gateway.internal_auth import INTERNAL_SYSTEM_ROLE
+    from app.gateway.routers.thread_runs import RunCreateRequest
+    from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, start_run
+
+    request = SimpleNamespace(
+        headers={},
+        state=SimpleNamespace(user=SimpleNamespace(id="internal", system_role=INTERNAL_SYSTEM_ROLE)),
+    )
+    body = RunCreateRequest(input={"messages": [{"role": "user", "content": "query"}]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(start_run(body, "thread-1", request, assistant_id_override=SQL_CROSS_VALIDATION_ASSISTANT_ID))
+
+    assert exc_info.value.status_code == 403
+
+
+def test_saas_thread_scope_binding_is_server_owned_and_rejects_scope_change():
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+    from langgraph.store.memory import InMemoryStore
+
+    from app.gateway.services import (
+        _SAAS_SCOPE_BINDING_METADATA_KEY,
+        _bind_or_validate_saas_thread_scope,
+        _strip_server_run_metadata,
+    )
+    from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
+    from deerflow.runtime.authorization_context import AuthorizationContext
+
+    def authorization(site_id: str):
+        return AuthorizationContext.from_mapping(
+            {
+                "principal_id": "saas-user-1",
+                "tenant_id": "tenant-1",
+                "tenant_code": "tenant-code",
+                "system_code": "efficiency",
+                "role_codes": ["site_admin"],
+                "scope_mode": "resource_set",
+                "allowed_site_ids": [site_id],
+                "allowed_project_ids": [],
+                "permission_version": "1",
+            }
+        )
+
+    async def scenario():
+        store = MemoryThreadMetaStore(InMemoryStore())
+        await store.create("thread-1", user_id="saas-user-1", metadata={})
+
+        existing, expected = await _bind_or_validate_saas_thread_scope(store, "thread-1", authorization("site-1"))
+        persisted = await store.get("thread-1", user_id="saas-user-1")
+        same, _ = await _bind_or_validate_saas_thread_scope(store, "thread-1", authorization("site-1"))
+        with pytest.raises(HTTPException) as exc_info:
+            await _bind_or_validate_saas_thread_scope(store, "thread-1", authorization("site-2"))
+        orphan_store = MemoryThreadMetaStore(InMemoryStore())
+        await orphan_store.create("orphan-thread", user_id=None, metadata={})
+        claimed, _ = await _bind_or_validate_saas_thread_scope(
+            orphan_store,
+            "orphan-thread",
+            authorization("site-1"),
+        )
+
+        empty_store = MemoryThreadMetaStore(InMemoryStore())
+        concurrent = await asyncio.gather(
+            _bind_or_validate_saas_thread_scope(
+                empty_store,
+                "new-thread",
+                authorization("site-1"),
+            ),
+            _bind_or_validate_saas_thread_scope(
+                empty_store,
+                "new-thread",
+                authorization("site-2"),
+            ),
+            return_exceptions=True,
+        )
+        reserved = await empty_store.get("new-thread", user_id="saas-user-1")
+        return existing, expected, persisted, same, exc_info.value, claimed, concurrent, reserved
+
+    existing, expected, persisted, same, error, claimed, concurrent, reserved = asyncio.run(scenario())
+
+    assert existing is not None
+    assert persisted["metadata"][_SAAS_SCOPE_BINDING_METADATA_KEY] == expected
+    assert same["metadata"][_SAAS_SCOPE_BINDING_METADATA_KEY] == expected
+    assert error.status_code == 409
+    assert claimed["user_id"] == "saas-user-1"
+    assert reserved is not None
+    concurrent_errors = [item for item in concurrent if isinstance(item, HTTPException)]
+    assert len(concurrent_errors) == 1
+    assert concurrent_errors[0].status_code == 409
+    assert _strip_server_run_metadata({_SAAS_SCOPE_BINDING_METADATA_KEY: {"scope_hash": "forged"}, "safe": True}) == {"safe": True}
+
+
 def test_start_run_uses_internal_owner_header_for_persistence(_stub_app_config):
     import asyncio
     from types import SimpleNamespace
@@ -1052,6 +1261,7 @@ def test_start_run_uses_internal_owner_header_for_persistence(_stub_app_config):
         with (
             patch("app.gateway.services.resolve_agent_factory", return_value=object()),
             patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+            patch("app.gateway.services.require_trusted_saas_authorization_context", return_value=object()),
         ):
             record = await start_run(body, "channel-thread", request)
             await record.task
@@ -1169,6 +1379,7 @@ def test_start_run_sql_cross_validation_forces_profile_context_and_stream_modes(
     from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, start_run
     from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
     from deerflow.runtime import RunManager
+    from deerflow.runtime.authorization_context import AuthorizationContext
     from deerflow.runtime.runs.store.memory import MemoryRunStore
 
     async def _scenario():
@@ -1207,9 +1418,25 @@ def test_start_run_sql_cross_validation_forces_profile_context_and_stream_modes(
         async def fake_run_agent(*args, **kwargs):
             captured.update(kwargs)
 
+        authorization = AuthorizationContext.from_mapping(
+            {
+                "principal_id": "saas-user-1",
+                "tenant_id": "tenant-1",
+                "tenant_code": "tenant-code",
+                "system_code": "efficiency",
+                "role_codes": ["site_admin"],
+                "scope_mode": "resource_set",
+                "allowed_site_ids": ["site-1"],
+                "allowed_project_ids": [],
+                "permission_version": "1",
+            }
+        )
+
         with (
             patch("app.gateway.services.resolve_agent_factory", return_value=object()),
             patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+            patch("app.gateway.services.require_trusted_saas_authorization_context", return_value=authorization),
+            patch("app.gateway.services.inject_trusted_saas_context"),
         ):
             record = await start_run(
                 body,
@@ -1221,18 +1448,121 @@ def test_start_run_sql_cross_validation_forces_profile_context_and_stream_modes(
             )
             await record.task
 
-        return record, captured
+        return record, captured, authorization.scope_hash
 
-    record, captured = asyncio.run(_scenario())
+    record, captured, expected_scope_hash = asyncio.run(_scenario())
 
     assert record.assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID
     assert record.metadata["run_profile"] == SQL_CROSS_VALIDATION_ASSISTANT_ID
+    assert record.metadata["scope_hash"] == expected_scope_hash
     assert captured["stream_modes"] == ["messages-tuple", "custom"]
     config = captured["config"]
     assert config["configurable"]["subagent_enabled"] is True
     assert config["configurable"]["max_concurrent_subagents"] == 2
     assert config["context"]["subagent_enabled"] is True
     assert config["context"]["max_concurrent_subagents"] == 2
+
+
+def test_start_run_saas_query_keeps_raw_jwt_only_in_live_runtime_context(_stub_app_config):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from app.gateway.services import SAAS_QUERY_ASSISTANT_ID, start_run
+    from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.authorization_context import AuthorizationContext
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+    from deerflow.runtime.secret_context import SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY
+
+    async def _scenario():
+        run_store = MemoryRunStore()
+        thread_store = MemoryThreadMetaStore(InMemoryStore())
+        run_manager = RunManager(store=run_store)
+        state = SimpleNamespace(
+            stream_bridge=SimpleNamespace(),
+            run_manager=run_manager,
+            checkpointer=InMemorySaver(),
+            store=InMemoryStore(),
+            run_event_store=SimpleNamespace(),
+            run_events_config=None,
+            thread_store=thread_store,
+        )
+        request = SimpleNamespace(
+            headers={},
+            state=SimpleNamespace(user=None),
+            app=SimpleNamespace(state=state),
+        )
+        body = SimpleNamespace(
+            assistant_id="lead_agent",
+            input={"messages": [{"role": "human", "content": "查询场地数量"}]},
+            metadata={},
+            config={"context": {SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY: "spoofed"}},
+            context={},
+            on_disconnect="cancel",
+            multitask_strategy="reject",
+            stream_mode="messages-tuple",
+            stream_subgraphs=False,
+            interrupt_before=None,
+            interrupt_after=None,
+            command=None,
+            checkpoint=None,
+            checkpoint_id=None,
+        )
+        authorization = AuthorizationContext.from_mapping(
+            {
+                "principal_id": "saas-user-1",
+                "tenant_id": "tenant-1",
+                "tenant_code": "tenant-code",
+                "system_code": "efficiency",
+                "role_codes": ["site_admin"],
+                "scope_mode": "resource_set",
+                "allowed_site_ids": ["site-1"],
+                "allowed_project_ids": [],
+                "permission_version": "1",
+            }
+        )
+        captured = {}
+
+        async def fake_run_agent(*_args, **kwargs):
+            captured["live_context"] = dict(kwargs["config"]["context"])
+
+        def fake_inject(config, _request, *, owner_user_id=None, include_authorization_token=False):
+            captured["include_authorization_token"] = include_authorization_token
+            context = config.setdefault("context", {})
+            context["authorization_context"] = authorization.to_runtime_dict()
+            if include_authorization_token:
+                context[SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] = "real-user-jwt"
+
+        with (
+            patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+            patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+            patch(
+                "app.gateway.services.require_trusted_saas_authorization_context",
+                return_value=authorization,
+            ),
+            patch("app.gateway.services.inject_trusted_saas_context", side_effect=fake_inject),
+        ):
+            record = await start_run(
+                body,
+                "thread-1",
+                request,
+                assistant_id_override=SAAS_QUERY_ASSISTANT_ID,
+                context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 1},
+            )
+            await record.task
+        return record, captured
+
+    record, captured = asyncio.run(_scenario())
+
+    assert captured["include_authorization_token"] is True
+    assert captured["live_context"][SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] == "real-user-jwt"
+    assert captured["live_context"]["semantic_trace_id"]
+    assert "real-user-jwt" not in str(record.kwargs)
+    assert "spoofed" not in str(record.kwargs)
 
 
 def test_launch_scheduled_thread_run_marks_context_non_interactive(_stub_app_config):

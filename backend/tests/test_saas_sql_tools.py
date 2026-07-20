@@ -5,14 +5,27 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from deerflow.runtime.authorization_context import AuthorizationContext
 from deerflow.runtime.tenant_context import TenantContext, resolve_runtime_tenant_context
 from deerflow.tools.builtins.tenant_datasource import TenantDataSource, TenantDataSourceError, build_database_code
-
 
 TENANT_DB = "carbon_client_efficiency_20251231184555_6"
 
 
 def _runtime() -> SimpleNamespace:
+    authorization = AuthorizationContext.from_mapping(
+        {
+            "principal_id": "saas-user-1",
+            "tenant_id": "tenant-1",
+            "tenant_code": "20251231184555_6",
+            "system_code": "efficiency",
+            "role_codes": ["site_admin"],
+            "scope_mode": "resource_set",
+            "allowed_site_ids": ["site-1"],
+            "allowed_project_ids": ["project-1"],
+            "permission_version": "1",
+        }
+    )
     return SimpleNamespace(
         context={
             "saas_user_id": "saas-user-1",
@@ -20,6 +33,7 @@ def _runtime() -> SimpleNamespace:
             "tenant_code": "20251231184555_6",
             "tenant_name": "纳泽演示",
             "system_code": "efficiency",
+            "authorization_context": authorization.to_runtime_dict(),
         }
     )
 
@@ -77,11 +91,7 @@ def test_resolve_tenant_datasource_queries_snake_case_conf_database_columns(monk
 
     captured = {}
     db = MagicMock()
-    db.run.return_value = (
-        "[('carbon_client_efficiency_20251231184555_6', "
-        "'jdbc:mysql://127.0.0.1:3306/carbon_client_efficiency_20251231184555_6', "
-        "'readonly', 'secret', 'com.mysql.cj.jdbc.Driver')]"
-    )
+    db.run.return_value = "[('carbon_client_efficiency_20251231184555_6', 'jdbc:mysql://127.0.0.1:3306/carbon_client_efficiency_20251231184555_6', 'readonly', 'secret', 'com.mysql.cj.jdbc.Driver')]"
 
     def fake_from_uri(uri: str, sample_rows_in_table_info: int = 3):
         captured["uri"] = uri
@@ -102,6 +112,8 @@ def test_resolve_tenant_datasource_queries_snake_case_conf_database_columns(monk
     assert "driver_class" in db.run.call_args.args[0]
     assert "userName" not in db.run.call_args.args[0]
     assert "driverClass" not in db.run.call_args.args[0]
+    assert db.run.call_args.kwargs["parameters"] == {"database_code": TENANT_DB}
+    assert db.run.call_args.kwargs["execution_options"] == {"timeout": 10}
     assert captured["sample_rows_in_table_info"] == 0
     assert ds.username == "readonly"
     assert ds.driver_class == "com.mysql.cj.jdbc.Driver"
@@ -138,6 +150,86 @@ def test_sql_show_databases_saas_mode_only_returns_allowed_database(monkeypatch)
 
     assert TENANT_DB in result
     assert "carbon_client_efficiency_other" not in result
+
+
+def test_saas_discovery_tools_emit_scope_audit(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    records = []
+    runtime = _runtime()
+    runtime.context.update(
+        {
+            "run_id": "run-discovery",
+            "thread_id": "thread-discovery",
+            "__run_journal": SimpleNamespace(record_middleware=lambda **kwargs: records.append(kwargs)),
+        }
+    )
+    runtime.tool_call_id = "tool-discovery"
+    db = MagicMock()
+    db.get_usable_table_names.return_value = ["iot_site", "iot_api_auth"]
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda ctx: _datasource())
+    monkeypatch.setattr(sql_tools, "_get_db", lambda database=None, runtime=None: db)
+    monkeypatch.setattr(
+        sql_tools,
+        "_safe_table_info",
+        lambda _db, table, _policy: f"CREATE TABLE `{table}` (`id` varchar(64))",
+    )
+
+    sql_tools.sql_show_databases.func(runtime=runtime)
+    sql_tools.sql_list_tables.func(runtime=runtime)
+    sql_tools.sql_schema.func("iot_site", runtime=runtime)
+
+    assert [record["changes"]["operation"] for record in records] == [
+        "sql_show_databases",
+        "sql_list_tables",
+        "sql_schema",
+    ]
+    assert all(record["changes"]["decision"] == "allow" for record in records)
+    assert all(record["changes"]["scope_hash"] for record in records)
+    assert records[1]["changes"]["referenced_tables"] == ["iot_site"]
+    assert records[2]["changes"]["referenced_tables"] == ["iot_site"]
+
+
+def test_saas_query_and_checker_emit_distinct_scope_audit_operations(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    records = []
+    runtime = _runtime()
+    runtime.context["__run_journal"] = SimpleNamespace(record_middleware=lambda **kwargs: records.append(kwargs))
+    db = MagicMock()
+    db.run.return_value = "[(1,)]"
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda _ctx: _datasource())
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", lambda *_args, **_kwargs: db)
+
+    sql_tools.sql_query.func("SELECT id FROM iot_site", runtime=runtime)
+    sql_tools.sql_query_checker.func("SELECT id FROM iot_site", runtime=runtime)
+
+    assert [record["changes"]["operation"] for record in records] == [
+        "sql_query",
+        "sql_query_checker",
+    ]
+    assert all(record["changes"]["decision"] == "allow" for record in records)
+
+
+def test_saas_list_tables_audits_disallowed_database_as_deny(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    records = []
+    runtime = _runtime()
+    runtime.context["__run_journal"] = SimpleNamespace(record_middleware=lambda **kwargs: records.append(kwargs))
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda _ctx: _datasource())
+
+    result = sql_tools.sql_list_tables.func(
+        database_name="carbon_client_efficiency_other",
+        runtime=runtime,
+    )
+
+    assert result == "Error listing tables: authorization denied."
+    assert len(records) == 1
+    audit = records[0]["changes"]
+    assert audit["operation"] == "sql_list_tables"
+    assert audit["decision"] == "deny"
+    assert audit["error_category"] == "AUTHORIZATION_DENIED"
 
 
 def test_validate_query_databases_allows_current_tenant_database():
@@ -220,11 +312,134 @@ def test_saas_query_adds_default_limit_and_uses_tenant_database(monkeypatch):
     monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda ctx: _datasource())
     monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", fake_from_uri)
 
-    result = sql_tools.sql_query.func("SELECT * FROM iot_project", runtime=_runtime())
+    result = sql_tools.sql_query.func("SELECT id FROM iot_project", runtime=_runtime())
 
     assert result == "[(1,)]"
     assert captured["uri"] == f"mysql+mysqlconnector://readonly:secret@127.0.0.1:3306/{TENANT_DB}"
-    db.run.assert_called_once_with("SELECT * FROM iot_project LIMIT 100")
+    executed = db.run.call_args
+    assert "scope_0_0" in executed.args[0]
+    assert executed.kwargs["parameters"] == {"scope_0_0": "site-1"}
+
+
+def test_saas_query_fails_closed_without_authorization(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    runtime = _runtime()
+    runtime.context.pop("authorization_context")
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda ctx: _datasource())
+
+    result = sql_tools.sql_query.func("SELECT id FROM iot_project", runtime=runtime)
+
+    assert result.startswith("Query blocked:")
+    assert "authorization context" in result
+
+
+def test_saas_authorization_without_tenant_context_never_falls_back_to_local_mysql(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    runtime = _runtime()
+    for key in ("tenant_id", "tenant_code", "system_code"):
+        runtime.context.pop(key)
+    from_uri = MagicMock(side_effect=AssertionError("local MySQL must not be opened"))
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", from_uri)
+
+    result = sql_tools.sql_query.func("SELECT id FROM iot_project", runtime=runtime)
+
+    assert result.startswith("Query blocked:")
+    assert "local MySQL fallback is disabled" in result
+    from_uri.assert_not_called()
+
+
+def test_saas_sql_audit_contains_scope_lineage_and_result_counts(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    records = []
+    journal = SimpleNamespace(record_middleware=lambda **kwargs: records.append(kwargs))
+    runtime = _runtime()
+    runtime.tool_call_id = "tool-1"
+    runtime.context.update(
+        {
+            "run_id": "run-1",
+            "thread_id": "thread-1",
+            "__run_journal": journal,
+        }
+    )
+    db = MagicMock()
+    db.run.return_value = "[{'id': 'project-1'}]"
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda _ctx: _datasource())
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", lambda *_args, **_kwargs: db)
+
+    result = sql_tools.sql_query.func("SELECT id FROM iot_project", runtime=runtime)
+
+    assert result == "[{'id': 'project-1'}]"
+    audit = records[-1]["changes"]
+    assert audit["run_id"] == "run-1"
+    assert audit["thread_id"] == "thread-1"
+    assert audit["tool_call_id"] == "tool-1"
+    assert audit["principal_id"] == "saas-user-1"
+    assert audit["referenced_tables"] == ["iot_project"]
+    assert "id" in audit["referenced_fields"]
+    assert audit["scope_predicates_applied"] == 1
+    assert audit["returned_rows"] == 1
+    assert audit["truncated"] is False
+    assert audit["error_category"] is None
+
+
+def test_saas_sql_precheck_denial_is_audited_without_opening_database(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    records = []
+    runtime = _runtime()
+    runtime.context["__run_journal"] = SimpleNamespace(record_middleware=lambda **kwargs: records.append(kwargs))
+    from_uri = MagicMock(side_effect=AssertionError("blocked SQL must not open a database"))
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", from_uri)
+
+    result = sql_tools.sql_query.func("DELETE FROM iot_project", runtime=runtime)
+
+    assert result.startswith("Query blocked:")
+    from_uri.assert_not_called()
+    assert len(records) == 1
+    audit = records[0]["changes"]
+    assert audit["operation"] == "sql_query"
+    assert audit["decision"] == "deny"
+    assert audit["deny_reason"] == audit["reason"]
+    assert audit["error_category"] == "QUERY_REJECTED"
+
+
+def test_saas_schema_disables_sample_rows(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    captured = {}
+    db = MagicMock()
+    db.get_usable_table_names.return_value = ["iot_project"]
+    db.get_table_info.return_value = "CREATE TABLE iot_project (...)"
+
+    def fake_from_uri(uri: str, sample_rows_in_table_info: int = 3):
+        captured["sample_rows"] = sample_rows_in_table_info
+        return db
+
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda ctx: _datasource())
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", fake_from_uri)
+    monkeypatch.setattr(sql_tools, "_safe_table_info", lambda _db, table, _policy: f"CREATE TABLE {table} (...)")
+
+    result = sql_tools.sql_schema.func("iot_project", runtime=_runtime())
+
+    assert "CREATE TABLE" in result
+    assert captured["sample_rows"] == 0
+
+
+def test_saas_schema_missing_table_does_not_reveal_forbidden_physical_tables(monkeypatch):
+    from deerflow.tools.builtins import sql_tools
+
+    db = MagicMock()
+    db.get_usable_table_names.return_value = ["iot_api_auth"]
+    monkeypatch.setattr(sql_tools, "resolve_tenant_datasource", lambda _ctx: _datasource())
+    monkeypatch.setattr(sql_tools.SQLDatabase, "from_uri", lambda *_args, **_kwargs: db)
+
+    result = sql_tools.sql_schema.func("iot_site", runtime=_runtime())
+
+    assert result == "Error: Tables not found: ['iot_site']."
+    assert "iot_api_auth" not in result
 
 
 def test_sql_tools_hide_runtime_from_model_schema():

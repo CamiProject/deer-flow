@@ -61,6 +61,7 @@ When you complete the task, provide:
 </output_format>""",
     tools=_SQL_TOOL_NAMES,
     disallowed_tools=["task", "ask_clarification", "present_files"],
+    skills=[],
     model="inherit",
     max_turns=50,
     timeout_seconds=300,

@@ -219,7 +219,7 @@ def test_strip_reserved_metadata_empty_input():
 
 
 def test_strip_reserved_metadata_strips_all_reserved_keys():
-    out = threads._strip_reserved_metadata({"user_id": "x", "keep": "me"})
+    out = threads._strip_reserved_metadata({"user_id": "x", "__saas_scope_binding": {"scope_hash": "forged"}, "keep": "me"})
     assert out == {"keep": "me"}
 
 

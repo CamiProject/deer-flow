@@ -119,7 +119,7 @@ _is_deerflow_pid() {
 # (or starting, which stops first) isn't silently killing someone else's run.
 _report_reclaimed_ports() {
     local port pid files root owner
-    for port in 8001 3000 2026; do
+    for port in 8001 8003 3000 2026; do
         for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
             _is_deerflow_pid "$pid" || continue
             files=$(lsof -b -w -p "$pid" 2>/dev/null)
@@ -251,6 +251,8 @@ stop_all() {
     echo "Stopping all services..."
     _report_reclaimed_ports
     _kill_repo_processes "uvicorn app.gateway.app:app"
+    _kill_repo_processes "uvicorn app.semantic.api:create_app"
+    _kill_repo_processes "app.semantic.worker"
     _kill_repo_processes "next dev"
     _kill_repo_processes "next start"
     _kill_repo_processes "next-server"
@@ -262,6 +264,7 @@ stop_all() {
     # not match by name still gets reclaimed — otherwise `make dev` fails its
     # nginx port preflight.
     _kill_repo_port 8001
+    _kill_repo_port 8003
     _kill_repo_port 3000
     _kill_repo_port 2026
     ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
@@ -325,6 +328,19 @@ mkdir -p "$DEER_FLOW_HOME" "$BACKEND_RUNTIME_HOME" "$REPO_ROOT/backend/sandbox"
 DEER_FLOW_HOME="$(cd "$DEER_FLOW_HOME" && pwd -P)"
 BACKEND_RUNTIME_HOME="$(cd "$BACKEND_RUNTIME_HOME" && pwd -P)"
 export DEER_FLOW_HOME
+
+# The Semantic API is independently authenticated even in local development.
+# Generate one ephemeral token for this launcher when the operator did not set
+# a durable value in .env.
+if [ -z "${DEER_FLOW_SEMANTIC_SERVICE_TOKEN:-}" ]; then
+    if ! SEMANTIC_TOKEN_PYTHON="$(_pick_python)"; then
+        echo "Python is required to generate DEER_FLOW_SEMANTIC_SERVICE_TOKEN."
+        exit 1
+    fi
+    export DEER_FLOW_SEMANTIC_SERVICE_TOKEN
+    DEER_FLOW_SEMANTIC_SERVICE_TOKEN="$($SEMANTIC_TOKEN_PYTHON -c 'import secrets; print(secrets.token_urlsafe(32))')"
+fi
+export DEER_FLOW_SEMANTIC_API_URL="${DEER_FLOW_SEMANTIC_API_URL:-http://127.0.0.1:8003}"
 
 # Extra flags for uvicorn
 if $DEV_MODE && ! $DAEMON_MODE; then
@@ -402,6 +418,7 @@ echo ""
 echo "  Mode: $MODE_LABEL"
 echo ""
 echo "  Services:"
+echo "    Semantic API → localhost:8003  (internal ontology/query/action API)"
 echo "    Gateway     → localhost:8001  (REST API + agent runtime)"
 echo "    Frontend    → localhost:3000  (Next.js)"
 echo "    Nginx       → localhost:2026  (reverse proxy)"
@@ -452,22 +469,55 @@ run_service() {
     echo "✓ $name started on localhost:$port"
 }
 
+start_background_service() {
+    local name="$1" cmd="$2" logfile="$3"
+
+    echo "Starting $name..."
+    if $DAEMON_MODE; then
+        nohup env DEERFLOW_DAEMON_ROOT="$REPO_ROOT" sh -c "$cmd" > /dev/null 2>&1 &
+    else
+        sh -c "$cmd" &
+    fi
+    sleep 1
+    echo "✓ $name started (log: $logfile)"
+}
+
 # ── Start services ───────────────────────────────────────────────────────────
 
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
-# 1. Gateway API
+# 1. Isolated Action Worker. Start it before scrubbing write credentials from
+# the launcher's exported environment. Missing credentials still fail closed.
+# commands to fail closed; the worker never falls back to arbitrary SQL.
+if [ "${DEER_FLOW_ACTIONS_ENABLED:-false}" = "true" ]; then
+    start_background_service "Action Worker" \
+        "cd backend && PYTHONPATH=. uv run python -m app.semantic.worker > ../logs/action-worker.log 2>&1" \
+        "logs/action-worker.log"
+fi
+
+# Do not expose write credentials to Semantic API, Gateway, Frontend or nginx.
+# The already-forked Action Worker retains its own inherited environment.
+unset DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN
+unset DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN
+unset SAAS_DOMAIN_API_TOKEN
+
+# 2. Semantic Platform API. It binds loopback and is not proxied by nginx.
+run_service "Semantic API" \
+    "cd backend && PYTHONPATH=. uv run uvicorn app.semantic.api:create_app --factory --host 127.0.0.1 --port 8003 $GATEWAY_EXTRA_FLAGS > ../logs/semantic-api.log 2>&1" \
+    8003 30
+
+# 3. Gateway API
 run_service "Gateway" \
     "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
     8001 30
 
-# 2. Frontend
+# 4. Frontend
 run_service "Frontend" \
     "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
     3000 120
 
-# 3. Nginx
+# 5. Nginx
 run_service "Nginx" \
     "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
     2026 10
@@ -485,7 +535,7 @@ echo "  Routing: Frontend → Nginx → Gateway"
 echo "  API:     /api/langgraph/*  →  Gateway agent runtime"
 echo "           /api/*              →  Gateway REST API (8001)"
 echo ""
-echo "  📋 Logs: logs/{gateway,frontend,nginx}.log"
+echo "  📋 Logs: logs/{semantic-api,action-worker,gateway,frontend,nginx}.log"
 echo ""
 
 if $DAEMON_MODE; then

@@ -16,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from deerflow.agents.thread_state import ThreadState
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.models import create_chat_model
+from deerflow.runtime.secret_context import SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY
 from deerflow.subagents import get_subagent_config
 from deerflow.subagents.executor import SubagentExecutor, SubagentResult, SubagentStatus
 from deerflow.tools.builtins.sql_tools import SQL_TOOLS
@@ -268,7 +269,12 @@ async def _cross_validate_node(state: ThreadState, config: RunnableConfig | None
     runtime_context = {
         key: value
         for key, value in runtime.items()
-        if key not in {"configurable", "callbacks"}
+        if key
+        not in {
+            "configurable",
+            "callbacks",
+            SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY,
+        }
     }
     runtime_context["app_config"] = app_config
 

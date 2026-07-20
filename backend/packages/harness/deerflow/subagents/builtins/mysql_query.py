@@ -61,6 +61,7 @@ You do not have bash, file, workspace, sandbox, or code-execution tools. Do not 
 </tool_boundary>""",
     tools=["sql_show_databases", "sql_list_tables", "sql_schema", "sql_query", "sql_query_checker"],
     disallowed_tools=["task", "ask_clarification", "present_files"],
+    skills=[],
     model="inherit",
     max_turns=50,
     timeout_seconds=300,

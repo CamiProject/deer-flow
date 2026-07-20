@@ -1,0 +1,12 @@
+version: "1"
+tables:
+  iot_site:
+    access: scoped
+    scope_dimension: site
+    scope_column: id
+    allowed_fields: [id, name]
+  iot_project:
+    access: scoped
+    scope_dimension: site
+    scope_column: site_id
+    allowed_fields: [id, name, site_id]

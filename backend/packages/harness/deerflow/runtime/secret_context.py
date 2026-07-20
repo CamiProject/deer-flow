@@ -25,6 +25,10 @@ SECRETS_CONTEXT_KEY = "secrets"
 # tool. Both reserved keys are stripped from trace payloads (see tracing redactor).
 ACTIVE_SECRETS_CONTEXT_KEY = "__active_skill_secrets"
 
+# Verified raw SaaS authorization JWT forwarded only to the independent
+# Semantic Platform. It lives on ToolRuntime.context, never in graph state.
+SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY = "__saas_authorization_token"
+
 
 def _string_pairs(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
@@ -67,6 +71,7 @@ REDACTED_CONTEXT_KEYS = frozenset(
         ACTIVE_SECRETS_CONTEXT_KEY,
         _SLASH_SECRET_SOURCE_KEY,
         _SECRETS_BINDING_AUDIT_KEY,
+        SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY,
     }
 )
 

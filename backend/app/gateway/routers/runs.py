@@ -17,7 +17,13 @@ from app.gateway.authz import require_permission
 from app.gateway.deps import get_checkpointer, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
 from app.gateway.routers.thread_runs import RunCreateRequest
-from app.gateway.services import SQL_CROSS_VALIDATION_ASSISTANT_ID, sse_consumer, start_run, wait_for_run_completion
+from app.gateway.services import (
+    SAAS_QUERY_ASSISTANT_ID,
+    SQL_CROSS_VALIDATION_ASSISTANT_ID,
+    sse_consumer,
+    start_run,
+    wait_for_run_completion,
+)
 from deerflow.runtime import serialize_channel_values_for_api
 
 logger = logging.getLogger(__name__)
@@ -84,6 +90,36 @@ async def stateless_sql_cross_validate_stream(body: RunCreateRequest, request: R
     )
 
 
+@router.post("/saas-query/stream")
+async def stateless_saas_query_stream(
+    body: RunCreateRequest,
+    request: Request,
+) -> StreamingResponse:
+    """Create a semantic-first SaaS run and stream events via SSE."""
+    thread_id = _resolve_thread_id(body)
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    record = await start_run(
+        body,
+        thread_id,
+        request,
+        assistant_id_override=SAAS_QUERY_ASSISTANT_ID,
+        context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 1},
+        required_stream_modes=["custom"],
+    )
+
+    return StreamingResponse(
+        sse_consumer(bridge, record, request, run_mgr),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Content-Location": f"/api/threads/{thread_id}/runs/{record.run_id}",
+        },
+    )
+
+
 @router.post("/wait", response_model=dict)
 async def stateless_wait(body: RunCreateRequest, request: Request) -> dict:
     """Create a run and block until completion.
@@ -128,6 +164,40 @@ async def stateless_sql_cross_validate_wait(body: RunCreateRequest, request: Req
         request,
         assistant_id_override=SQL_CROSS_VALIDATION_ASSISTANT_ID,
         context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 2},
+        required_stream_modes=["custom"],
+    )
+
+    completed = True
+    if record.task is not None:
+        completed = await wait_for_run_completion(bridge, record, request, run_mgr)
+
+    if completed:
+        checkpointer = get_checkpointer(request)
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint_tuple = await checkpointer.aget_tuple(config)
+            if checkpoint_tuple is not None:
+                checkpoint = getattr(checkpoint_tuple, "checkpoint", {}) or {}
+                channel_values = checkpoint.get("channel_values", {})
+                return serialize_channel_values_for_api(channel_values)
+        except Exception:
+            logger.exception("Failed to fetch final state for run %s", record.run_id)
+
+    return {"status": record.status.value, "error": record.error}
+
+
+@router.post("/saas-query/wait", response_model=dict)
+async def stateless_saas_query_wait(body: RunCreateRequest, request: Request) -> dict:
+    """Create a semantic-first SaaS run and wait for completion."""
+    thread_id = _resolve_thread_id(body)
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    record = await start_run(
+        body,
+        thread_id,
+        request,
+        assistant_id_override=SAAS_QUERY_ASSISTANT_ID,
+        context_overrides={"subagent_enabled": True, "max_concurrent_subagents": 1},
         required_stream_modes=["custom"],
     )
 

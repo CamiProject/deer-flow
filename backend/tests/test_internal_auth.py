@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import time
 from types import SimpleNamespace
+
+import jwt
+import pytest
 
 
 def test_internal_auth_uses_shared_env_token(monkeypatch):
@@ -130,3 +134,91 @@ def test_get_trusted_saas_context_rejects_unsafe_required_headers():
     )
 
     assert internal_auth.get_trusted_saas_context(request) == {}
+
+
+def _authorization_token(monkeypatch, **overrides):
+    from app.gateway import internal_auth
+
+    test_secret = "test-secret-at-least-thirty-two-bytes"
+    monkeypatch.setenv(internal_auth.SAAS_AUTHORIZATION_JWT_KEY_ENV_VAR, test_secret)
+    monkeypatch.setenv(internal_auth.SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR, "HS256")
+    now = int(time.time())
+    claims = {
+        "iss": "saas-gateway",
+        "aud": ["deerflow", "semantic-platform"],
+        "sub": "saas-user-1",
+        "tenant_id": "tenant-1",
+        "tenant_code": "20251231184555_6",
+        "tenant_name": "纳泽演示",
+        "system_code": "efficiency",
+        "role_codes": ["site_admin"],
+        "scope": {"mode": "resource_set", "site_ids": ["site-1"], "project_ids": []},
+        "permission_version": "42",
+        "iat": now,
+        "exp": now + 300,
+        "jti": "authz-1",
+    }
+    claims.update(overrides)
+    return jwt.encode(claims, test_secret, algorithm="HS256")
+
+
+def test_get_trusted_saas_authorization_context_verifies_and_normalizes(monkeypatch):
+    from app.gateway import internal_auth
+
+    token = _authorization_token(monkeypatch)
+    request = SimpleNamespace(
+        headers={internal_auth.SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME: token},
+        state=SimpleNamespace(user=SimpleNamespace(system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    context = internal_auth.get_trusted_saas_authorization_context(request)
+
+    assert context is not None
+    assert context.principal_id == "saas-user-1"
+    assert context.allowed_site_ids == ("site-1",)
+    assert internal_auth.get_trusted_saas_authorization_token(request) == token
+    assert internal_auth.get_trusted_saas_context(request) == {
+        "tenant_id": "tenant-1",
+        "tenant_code": "20251231184555_6",
+        "tenant_name": "纳泽演示",
+        "system_code": "efficiency",
+    }
+
+
+def test_get_trusted_saas_authorization_context_rejects_expired_token(monkeypatch):
+    from app.gateway import internal_auth
+
+    token = _authorization_token(monkeypatch, exp=int(time.time()) - 1)
+    request = SimpleNamespace(
+        headers={internal_auth.SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME: token},
+        state=SimpleNamespace(user=SimpleNamespace(system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    with pytest.raises(internal_auth.SaasAuthorizationError):
+        internal_auth.get_trusted_saas_authorization_context(request)
+
+
+def test_get_trusted_saas_authorization_context_rejects_excessive_ttl(monkeypatch):
+    from app.gateway import internal_auth
+
+    now = int(time.time())
+    token = _authorization_token(monkeypatch, iat=now, exp=now + 3600)
+    request = SimpleNamespace(
+        headers={internal_auth.SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME: token},
+        state=SimpleNamespace(user=SimpleNamespace(system_role=internal_auth.INTERNAL_SYSTEM_ROLE)),
+    )
+
+    with pytest.raises(internal_auth.SaasAuthorizationError, match="lifetime"):
+        internal_auth.get_trusted_saas_authorization_context(request)
+
+
+def test_get_trusted_saas_authorization_token_ignores_non_internal_user(monkeypatch):
+    from app.gateway import internal_auth
+
+    token = _authorization_token(monkeypatch)
+    request = SimpleNamespace(
+        headers={internal_auth.SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME: token},
+        state=SimpleNamespace(user=SimpleNamespace(system_role="user")),
+    )
+
+    assert internal_auth.get_trusted_saas_authorization_token(request) is None

@@ -88,6 +88,54 @@ def test_stateless_sql_cross_validate_stream_forces_profile(monkeypatch):
     assert calls["kwargs"]["required_stream_modes"] == ["custom"]
 
 
+def test_stateless_saas_query_stream_forces_semantic_profile(monkeypatch):
+    from app.gateway.services import SAAS_QUERY_ASSISTANT_ID
+
+    app = _make_app()
+    app.state.stream_bridge = MagicMock()
+    app.state.run_manager = MagicMock()
+    calls = {}
+
+    async def fake_start_run(body, thread_id, request, **kwargs):
+        calls["thread_id"] = thread_id
+        calls["kwargs"] = kwargs
+        return type(
+            "Record",
+            (),
+            {
+                "run_id": "run-1",
+                "thread_id": thread_id,
+                "status": None,
+                "on_disconnect": None,
+            },
+        )()
+
+    async def fake_sse_consumer(*_args, **_kwargs):
+        yield "event: end\ndata: null\n\n"
+
+    monkeypatch.setattr(runs, "start_run", fake_start_run)
+    monkeypatch.setattr(runs, "sse_consumer", fake_sse_consumer)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs/saas-query/stream",
+            json={
+                "assistant_id": "lead_agent",
+                "input": {"messages": [{"role": "user", "content": "查询场地数量"}]},
+                "config": {"configurable": {"thread_id": "thread-1"}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls["thread_id"] == "thread-1"
+    assert calls["kwargs"]["assistant_id_override"] == SAAS_QUERY_ASSISTANT_ID
+    assert calls["kwargs"]["context_overrides"] == {
+        "subagent_enabled": True,
+        "max_concurrent_subagents": 1,
+    }
+    assert calls["kwargs"]["required_stream_modes"] == ["custom"]
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------

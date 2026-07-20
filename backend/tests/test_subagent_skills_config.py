@@ -526,6 +526,15 @@ class TestRegistryAvailableNames:
             "sql_query_checker",
         ]
         assert config.disallowed_tools == ["task", "ask_clarification", "present_files"]
+        assert config.skills == []
+
+    def test_mysql_query_builtin_disables_skills(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        _reset_subagents_config()
+        config = get_subagent_config("mysql-query")
+        assert config is not None
+        assert config.skills == []
 
     def test_includes_custom_names(self):
         from deerflow.subagents.registry import get_subagent_names

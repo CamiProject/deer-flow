@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import uuid
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
@@ -25,8 +27,12 @@ from app.gateway.deps import get_checkpointer, get_local_provider, get_run_conte
 from app.gateway.internal_auth import (
     INTERNAL_OWNER_USER_ID_HEADER_NAME,
     INTERNAL_SYSTEM_ROLE,
+    SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME,
+    SaasAuthorizationError,
     get_internal_user,
     get_trusted_internal_owner_user_id,
+    get_trusted_saas_authorization_context,
+    get_trusted_saas_authorization_token,
     get_trusted_saas_context,
 )
 from app.gateway.utils import sanitize_log_param
@@ -45,8 +51,11 @@ from deerflow.runtime import (
 )
 from deerflow.runtime.goal import goal_thread_lock
 from deerflow.runtime.runs.naming import resolve_root_run_name
-from deerflow.runtime.secret_context import redact_config_secrets
-from deerflow.runtime.user_context import reset_current_user, set_current_user
+from deerflow.runtime.secret_context import (
+    SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY,
+    redact_config_secrets,
+)
+from deerflow.runtime.user_context import AUTO, reset_current_user, set_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +176,9 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"
 SQL_CROSS_VALIDATION_ASSISTANT_ID = "sql-cross-validation"
+SAAS_QUERY_ASSISTANT_ID = "saas-query"
+_TRUSTED_SAAS_ASSISTANT_IDS = frozenset({SQL_CROSS_VALIDATION_ASSISTANT_ID, SAAS_QUERY_ASSISTANT_ID})
+_SAAS_SCOPE_BINDING_METADATA_KEY = "__saas_scope_binding"
 
 
 # Whitelist of run-context keys that the langgraph-compat layer forwards from
@@ -201,17 +213,24 @@ _PROTECTED_SAAS_CONTEXT_KEYS: frozenset[str] = frozenset(
         "tenant_code",
         "tenant_name",
         "system_code",
+        "authorization_context",
+        "principal_id",
+        "role_codes",
+        "scope_mode",
+        "allowed_site_ids",
+        "allowed_project_ids",
+        "scope_ref",
+        "permission_version",
+        "scope_hash",
+        "semantic_trace_id",
     }
 )
 
 
 def _strip_protected_saas_context_values(context: Mapping[str, Any]) -> dict[str, Any]:
     """Drop caller-controlled fields reserved for trusted server context."""
-    return {
-        key: value
-        for key, value in context.items()
-        if key not in _PROTECTED_SAAS_CONTEXT_KEYS and not (isinstance(key, str) and key.startswith("__"))
-    }
+    return {key: value for key, value in context.items() if key not in _PROTECTED_SAAS_CONTEXT_KEYS and not (isinstance(key, str) and key.startswith("__"))}
+
 
 # Keys forwarded from ``body.context`` into ``config['context']`` ONLY (the
 # runtime context that becomes ``ToolRuntime.context`` / ``runtime.context``),
@@ -369,7 +388,13 @@ def inject_authenticated_user_context(
         runtime_context["oauth_id"] = getattr(user, "oauth_id", None)
 
 
-def inject_trusted_saas_context(config: dict[str, Any], request: Request, *, owner_user_id: str | None = None) -> None:
+def inject_trusted_saas_context(
+    config: dict[str, Any],
+    request: Request,
+    *,
+    owner_user_id: str | None = None,
+    include_authorization_token: bool = False,
+) -> None:
     """Stamp trusted SaaS tenant context from internal Gateway headers.
 
     Tenant identity is a server-side trust boundary and must never be accepted
@@ -387,6 +412,117 @@ def inject_trusted_saas_context(config: dict[str, Any], request: Request, *, own
     if owner_user_id:
         runtime_context["saas_user_id"] = str(owner_user_id)
     runtime_context.update(saas_context)
+    authorization = get_trusted_saas_authorization_context(request)
+    if authorization is not None:
+        runtime_context["saas_user_id"] = authorization.principal_id
+        runtime_context["authorization_context"] = authorization.to_runtime_dict()
+        if include_authorization_token:
+            token = get_trusted_saas_authorization_token(request)
+            if token is not None:
+                runtime_context[SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] = token
+        else:
+            runtime_context.pop(SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY, None)
+
+
+def require_trusted_saas_authorization_context(request: Request):
+    """Resolve the mandatory scope for a SaaS SQL profile before run creation."""
+    try:
+        authorization = get_trusted_saas_authorization_context(request)
+    except SaasAuthorizationError as exc:
+        raise HTTPException(status_code=401, detail="Invalid SaaS authorization context") from exc
+    if authorization is None:
+        raise HTTPException(status_code=403, detail="SaaS authorization context is required")
+    return authorization
+
+
+def enforce_sql_cross_validation_role(authorization: Any) -> None:
+    """Apply the optional break-glass role allowlist to the legacy SQL route."""
+    configured = os.environ.get(
+        "DEER_FLOW_SQL_CROSS_VALIDATE_ALLOWED_ROLES",
+        "",
+    ).strip()
+    if not configured:
+        return
+    allowed = {role.strip() for role in configured.split(",") if role.strip()}
+    if not allowed.intersection(authorization.role_codes):
+        raise HTTPException(
+            status_code=403,
+            detail="The scoped SQL compatibility route is restricted to break-glass roles",
+        )
+
+
+def _saas_scope_binding(authorization: Any) -> dict[str, str]:
+    return {
+        "principal_id": authorization.principal_id,
+        "tenant_id": authorization.tenant_id,
+        "system_code": authorization.system_code,
+        "scope_hash": authorization.scope_hash,
+        "permission_version": authorization.permission_version,
+    }
+
+
+def _strip_server_run_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    return {key: value for key, value in dict(metadata or {}).items() if key != _SAAS_SCOPE_BINDING_METADATA_KEY and not (isinstance(key, str) and key.startswith("__"))}
+
+
+async def _bind_or_validate_saas_thread_scope(
+    thread_store: Any,
+    thread_id: str,
+    authorization: Any,
+    *,
+    assistant_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    """Bind an unscoped thread once or reject reuse across authorization scopes."""
+    expected = _saas_scope_binding(authorization)
+    async with goal_thread_lock(thread_id):
+        existing = await thread_store.get(
+            thread_id,
+            user_id=authorization.principal_id,
+        )
+        if existing is None:
+            existing = await thread_store.get(thread_id, user_id=None)
+            if existing is not None and existing.get("user_id") not in {
+                None,
+                authorization.principal_id,
+            }:
+                raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+        if existing is None:
+            existing = await thread_store.create(
+                thread_id,
+                assistant_id=assistant_id,
+                user_id=authorization.principal_id,
+                metadata={
+                    **dict(metadata or {}),
+                    _SAAS_SCOPE_BINDING_METADATA_KEY: expected,
+                },
+            )
+            return existing, expected
+
+        current = (existing.get("metadata") or {}).get(_SAAS_SCOPE_BINDING_METADATA_KEY)
+        if current is not None and current != expected:
+            raise HTTPException(
+                status_code=409,
+                detail="SaaS authorization scope changed; create a new thread",
+            )
+        if current is None:
+            await thread_store.update_metadata(
+                thread_id,
+                {_SAAS_SCOPE_BINDING_METADATA_KEY: expected},
+                user_id=None,
+            )
+            existing = dict(existing)
+            existing_metadata = dict(existing.get("metadata") or {})
+            existing_metadata[_SAAS_SCOPE_BINDING_METADATA_KEY] = expected
+            existing["metadata"] = existing_metadata
+        if existing.get("user_id") is None:
+            await thread_store.update_owner(
+                thread_id,
+                authorization.principal_id,
+                user_id=None,
+            )
+            existing = {**existing, "user_id": authorization.principal_id}
+        return existing, expected
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -402,6 +538,10 @@ def resolve_agent_factory(assistant_id: str | None):
         from deerflow.agents.sql_cross_validation import make_sql_cross_validation_agent
 
         return make_sql_cross_validation_agent
+    if assistant_id == SAAS_QUERY_ASSISTANT_ID:
+        from deerflow.agents.saas_query import make_saas_query_agent
+
+        return make_saas_query_agent
 
     from deerflow.agents.lead_agent.agent import make_lead_agent
 
@@ -537,7 +677,10 @@ def build_run_config(
         config["configurable"] = {"thread_id": thread_id}
 
     # Inject custom agent name when the caller specified a non-default assistant.
-    if assistant_id and assistant_id not in {_DEFAULT_ASSISTANT_ID, SQL_CROSS_VALIDATION_ASSISTANT_ID}:
+    if assistant_id and assistant_id not in {
+        _DEFAULT_ASSISTANT_ID,
+        *_TRUSTED_SAAS_ASSISTANT_IDS,
+    }:
         normalized = assistant_id.strip().lower().replace("_", "-")
         if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
             raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")
@@ -644,13 +787,25 @@ async def start_run(
     request : Request
         FastAPI request — used to retrieve singletons from ``app.state``.
     """
+    effective_assistant_id = assistant_id_override if assistant_id_override is not None else body.assistant_id
+    request_user = getattr(getattr(request, "state", None), "user", None)
+    has_signed_saas_context = bool(request.headers.get(SAAS_AUTHORIZATION_CONTEXT_HEADER_NAME))
+    if has_signed_saas_context and getattr(request_user, "system_role", None) == INTERNAL_SYSTEM_ROLE and effective_assistant_id not in _TRUSTED_SAAS_ASSISTANT_IDS:
+        raise HTTPException(
+            status_code=403,
+            detail="Signed SaaS requests must use a dedicated SaaS run profile",
+        )
+    saas_authorization = None
+    if effective_assistant_id in _TRUSTED_SAAS_ASSISTANT_IDS:
+        saas_authorization = require_trusted_saas_authorization_context(request)
+        if effective_assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID:
+            enforce_sql_cross_validation_role(saas_authorization)
+
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
     run_ctx = get_run_context(request)
 
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
-
-    effective_assistant_id = assistant_id_override if assistant_id_override is not None else body.assistant_id
     body_context = dict(getattr(body, "context", None) or {})
     if context_overrides:
         body_context.update(context_overrides)
@@ -671,6 +826,10 @@ async def start_run(
             )
 
     owner_user_id = get_trusted_internal_owner_user_id(request)
+    if saas_authorization is not None:
+        if owner_user_id and owner_user_id != saas_authorization.principal_id:
+            raise HTTPException(status_code=401, detail="SaaS principal does not match internal owner")
+        owner_user_id = saas_authorization.principal_id
     # Stateless run endpoints carry thread_id in the request *body*, so the
     # @require_permission(owner_check=True) decorator -- which resolves ownership
     # from the path param -- cannot protect them. Enforce thread ownership here,
@@ -694,6 +853,19 @@ async def start_run(
         if not allowed:
             raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
 
+    safe_body_metadata = _strip_server_run_metadata(body.metadata)
+
+    existing_saas_thread = None
+    scope_binding = None
+    if saas_authorization is not None:
+        existing_saas_thread, scope_binding = await _bind_or_validate_saas_thread_scope(
+            run_ctx.thread_store,
+            thread_id,
+            saas_authorization,
+            assistant_id=effective_assistant_id,
+            metadata=safe_body_metadata,
+        )
+
     owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
     try:
         try:
@@ -703,8 +875,16 @@ async def start_run(
                     effective_assistant_id,
                     on_disconnect=disconnect,
                     metadata={
-                        **(body.metadata or {}),
-                        **({"run_profile": SQL_CROSS_VALIDATION_ASSISTANT_ID} if effective_assistant_id == SQL_CROSS_VALIDATION_ASSISTANT_ID else {}),
+                        **safe_body_metadata,
+                        **({"run_profile": effective_assistant_id} if effective_assistant_id in _TRUSTED_SAAS_ASSISTANT_IDS else {}),
+                        **(
+                            {
+                                "scope_hash": saas_authorization.scope_hash,
+                                "permission_version": saas_authorization.permission_version,
+                            }
+                            if saas_authorization is not None
+                            else {}
+                        ),
                     },
                     # Persist a secret-redacted copy of the config: the run record is
                     # written to runs.kwargs_json and echoed by the run API, so a
@@ -724,7 +904,7 @@ async def start_run(
         # even for threads that were never explicitly created via POST /threads
         # (e.g. stateless runs).
         try:
-            existing = await run_ctx.thread_store.get(thread_id)
+            existing = existing_saas_thread or await run_ctx.thread_store.get(thread_id)
             if existing is None and owner_user_id:
                 unscoped_existing = await run_ctx.thread_store.get(thread_id, user_id=None)
                 if unscoped_existing is not None:
@@ -735,7 +915,11 @@ async def start_run(
                 await run_ctx.thread_store.create(
                     thread_id,
                     assistant_id=effective_assistant_id,
-                    metadata=body.metadata,
+                    user_id=owner_user_id if saas_authorization is not None else AUTO,
+                    metadata={
+                        **safe_body_metadata,
+                        **({_SAAS_SCOPE_BINDING_METADATA_KEY: scope_binding} if scope_binding is not None else {}),
+                    },
                 )
             else:
                 await run_ctx.thread_store.update_status(thread_id, "running")
@@ -764,7 +948,16 @@ async def start_run(
             strip_internal_context_keys(config)
         internal_owner_user = await resolve_trusted_internal_owner_for_attribution(request, owner_user_id)
         inject_authenticated_user_context(config, request, internal_owner_user=internal_owner_user)
-        inject_trusted_saas_context(config, request, owner_user_id=owner_user_id)
+        if effective_assistant_id == SAAS_QUERY_ASSISTANT_ID:
+            runtime_context = config.setdefault("context", {})
+            if isinstance(runtime_context, dict):
+                runtime_context["semantic_trace_id"] = str(uuid.uuid4())
+        inject_trusted_saas_context(
+            config,
+            request,
+            owner_user_id=owner_user_id,
+            include_authorization_token=(effective_assistant_id == SAAS_QUERY_ASSISTANT_ID),
+        )
 
         stream_modes = merge_stream_modes(body.stream_mode, required_stream_modes)
 

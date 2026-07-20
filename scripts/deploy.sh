@@ -236,6 +236,37 @@ if  [ "$CMD" != "down" ] && [ -z "$DEER_FLOW_INTERNAL_AUTH_TOKEN" ]; then
     fi
 fi
 
+# ── DEER_FLOW_SEMANTIC_SERVICE_TOKEN ────────────────────────────────────────
+# Shared only between Gateway, Semantic API and Action Worker for internal API
+# authentication. It is distinct from user Authorization Context JWTs.
+
+_semantic_service_token_file="$DEER_FLOW_HOME/.semantic-service-token"
+if [ "$CMD" != "down" ] && [ -z "$DEER_FLOW_SEMANTIC_SERVICE_TOKEN" ]; then
+    if [ -f "$_semantic_service_token_file" ]; then
+        export DEER_FLOW_SEMANTIC_SERVICE_TOKEN
+        DEER_FLOW_SEMANTIC_SERVICE_TOKEN="$(cat "$_semantic_service_token_file")"
+        echo -e "${GREEN}✓ DEER_FLOW_SEMANTIC_SERVICE_TOKEN loaded from $_semantic_service_token_file${NC}"
+    else
+        export DEER_FLOW_SEMANTIC_SERVICE_TOKEN
+        if command -v python3 > /dev/null 2>&1 && \
+            DEER_FLOW_SEMANTIC_SERVICE_TOKEN="$(python3 -c 'import sys; sys.version_info >= (3, 6) or sys.exit(1); import secrets; print(secrets.token_urlsafe(32))' 2>/dev/null)"; then
+            true
+        elif command -v python > /dev/null 2>&1 && \
+            DEER_FLOW_SEMANTIC_SERVICE_TOKEN="$(python -c 'import sys; sys.version_info >= (3, 6) or sys.exit(1); import secrets; print(secrets.token_urlsafe(32))' 2>/dev/null)"; then
+            true
+        elif command -v openssl > /dev/null 2>&1 && \
+            DEER_FLOW_SEMANTIC_SERVICE_TOKEN="$(openssl rand -hex 32)"; then
+            true
+        else
+            echo -e "${RED}✗ Cannot generate DEER_FLOW_SEMANTIC_SERVICE_TOKEN.${NC}" >&2
+            exit 1
+        fi
+        echo "$DEER_FLOW_SEMANTIC_SERVICE_TOKEN" > "$_semantic_service_token_file"
+        chmod 600 "$_semantic_service_token_file"
+        echo -e "${GREEN}✓ DEER_FLOW_SEMANTIC_SERVICE_TOKEN generated → $_semantic_service_token_file${NC}"
+    fi
+fi
+
 # ── UV_EXTRAS auto-detection ─────────────────────────────────────────────────
 # The production Dockerfile accepts UV_EXTRAS as a single build-arg token and
 # adds the --extra prefix itself. Convert the detector's uv flag string
@@ -320,6 +351,7 @@ if [ "$CMD" = "down" ]; then
     export DEER_FLOW_REPO_ROOT="${DEER_FLOW_REPO_ROOT:-$REPO_ROOT}"
     export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-placeholder}"
     export DEER_FLOW_INTERNAL_AUTH_TOKEN="${DEER_FLOW_INTERNAL_AUTH_TOKEN:-placeholder}"
+    export DEER_FLOW_SEMANTIC_SERVICE_TOKEN="${DEER_FLOW_SEMANTIC_SERVICE_TOKEN:-placeholder}"
     "${COMPOSE_CMD[@]}" down
     exit 0
 fi
@@ -360,7 +392,7 @@ echo -e "${BLUE}Sandbox mode: $sandbox_mode${NC}"
 
 echo -e "${BLUE}Runtime: Gateway embedded agent runtime${NC}"
 
-services="redis frontend gateway nginx"
+services="redis semantic-api action-worker frontend gateway nginx"
 
 if [ "$sandbox_mode" = "provisioner" ]; then
     services="$services provisioner"
@@ -412,10 +444,13 @@ echo ""
 echo "  🌐 Application: http://localhost:${PORT:-2026}"
 echo "  📡 API Gateway: http://localhost:${PORT:-2026}/api/*"
 echo "  🤖 Runtime:     Gateway embedded"
+echo "  🧩 Semantic:    internal semantic-api:8003 + isolated action-worker"
 echo "  API:            /api/langgraph/* → Gateway"
 echo ""
 echo "  Manage:"
 echo "    make down                         — stop and remove containers"
 echo "    docker logs -f deer-flow-gateway  — view gateway logs"
+echo "    docker logs -f deer-flow-semantic-api — view semantic API logs"
+echo "    docker logs -f deer-flow-action-worker — view Action Worker logs"
 echo "    docker logs -f deer-flow-frontend — view frontend logs"
 echo ""

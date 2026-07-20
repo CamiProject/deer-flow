@@ -321,6 +321,20 @@ DeerFlow runs the agent runtime inside the Gateway API. Development mode enables
 
 Gateway owns `/api/langgraph/*` and translates those public LangGraph-compatible paths to its native `/api/*` routers behind nginx.
 
+#### SaaS Semantic Query Profile
+
+For multi-tenant SaaS data questions, use the dedicated `/api/runs/saas-query/*` or
+threaded `/api/threads/{thread_id}/runs/saas-query/*` endpoints. This profile never
+routes through the Lead Agent or `general-purpose`: it uses an independently
+authenticated Semantic API, scoped SQL AST enforcement, SQL-free semantic tools,
+and an isolated Action Worker for approved writes. The older
+`/sql-cross-validate/*` route remains available as an A-protected compatibility or
+break-glass path.
+
+See [SaaS Semantic Query and Action Implementation](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)
+for the JWT contract, IAM resolver APIs, Ontology policy, deployment variables,
+Action lifecycle, and security boundaries.
+
 #### Docker Production Deployment
 
 `deploy.sh` supports building and starting separately:

@@ -1,0 +1,196 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title description">
+  <title id="title">Semantic Platform and Action Worker process architecture</title>
+  <desc id="description">Architecture diagram showing service, process, main thread, asyncio event loop, coroutine tasks, thread pools, metadata database, tenant database, SaaS IAM, and Domain API.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#52606d"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#775da6"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; letter-spacing: 0; fill: #17212b; }
+      .title { font-size: 30px; font-weight: 700; }
+      .subtitle { font-size: 15px; fill: #52606d; }
+      .service-title { font-size: 22px; font-weight: 700; }
+      .section-title { font-size: 16px; font-weight: 700; }
+      .label { font-size: 14px; }
+      .small { font-size: 12px; fill: #52606d; }
+      .tiny { font-size: 11px; fill: #52606d; }
+      .service-semantic { fill: #f5f8ed; stroke: #60843d; stroke-width: 2; }
+      .service-worker { fill: #f7f3fb; stroke: #775da6; stroke-width: 2; }
+      .process { fill: #ffffff; stroke: #354b5e; stroke-width: 1.5; }
+      .thread { fill: #edf5f7; stroke: #4d7c86; stroke-width: 1.5; }
+      .loop { fill: #f8fbfc; stroke: #4d7c86; stroke-width: 1.5; }
+      .task-semantic { fill: #e8f3df; stroke: #60843d; stroke-width: 1.2; }
+      .task-worker { fill: #eee6f6; stroke: #775da6; stroke-width: 1.2; }
+      .pool { fill: #fff5dc; stroke: #ad7a14; stroke-width: 1.5; }
+      .thread-box { fill: #fffaf0; stroke: #c89a38; stroke-width: 1; }
+      .memory { fill: #eaf1f8; stroke: #486d91; stroke-width: 1.3; }
+      .external { fill: #f4f5f6; stroke: #66717c; stroke-width: 1.5; }
+      .credential { fill: #fbe9e7; stroke: #b75042; stroke-width: 1.3; }
+      .line { fill: none; stroke: #52606d; stroke-width: 1.8; marker-end: url(#arrow); }
+      .line-purple { fill: none; stroke: #775da6; stroke-width: 1.8; marker-end: url(#arrow-purple); }
+      .dispatch { fill: none; stroke: #ad7a14; stroke-width: 1.7; stroke-dasharray: 7 5; marker-end: url(#arrow); }
+      .db-line { fill: none; stroke: #486d91; stroke-width: 2; marker-end: url(#arrow); }
+      .separator { stroke: #cbd2d9; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1120" fill="#fbfcfd"/>
+  <text x="54" y="54" class="title">Semantic Platform 与 Action Worker 运行时架构</text>
+  <text x="54" y="82" class="subtitle">层次：服务边界 → 进程 → 主线程 → asyncio Event Loop → Task（协程）/ Thread Pool</text>
+
+  <!-- Semantic Platform service -->
+  <rect x="50" y="115" width="710" height="760" rx="8" class="service-semantic"/>
+  <text x="78" y="153" class="service-title">Semantic Platform 服务</text>
+  <text x="78" y="177" class="small">内部 HTTP :8003 · 当前生产固定 1 个 Uvicorn worker</text>
+
+  <rect x="76" y="198" width="658" height="642" rx="8" class="process"/>
+  <text x="98" y="229" class="section-title">进程：Semantic API Uvicorn Worker × 1</text>
+  <text x="500" y="229" class="small">开发模式另有 reload supervisor</text>
+
+  <rect x="98" y="250" width="420" height="548" rx="8" class="thread"/>
+  <text x="118" y="280" class="section-title">主线程 × 1</text>
+
+  <rect x="116" y="298" width="384" height="480" rx="8" class="loop"/>
+  <text x="136" y="328" class="section-title">asyncio Event Loop × 1</text>
+  <text x="136" y="350" class="small">多个请求 Task 在同一主线程上协作调度</text>
+
+  <rect x="138" y="372" width="340" height="72" rx="6" class="task-semantic"/>
+  <text x="158" y="398" class="section-title">HTTP Request Tasks × N</text>
+  <text x="158" y="421" class="small">鉴权、请求解析、响应与审计</text>
+
+  <rect x="138" y="460" width="340" height="72" rx="6" class="task-semantic"/>
+  <text x="158" y="486" class="section-title">Semantic Query Tasks × N</text>
+  <text x="158" y="509" class="small">对象、指标、OAG、Scoped Query 编排</text>
+
+  <rect x="138" y="548" width="340" height="88" rx="6" class="task-semantic"/>
+  <text x="158" y="574" class="section-title">Action API Tasks × N</text>
+  <text x="158" y="597" class="small">propose / preview / approve / enqueue</text>
+  <text x="158" y="618" class="tiny">enqueue 只写 READY execution，不直接执行写回</text>
+
+  <rect x="138" y="652" width="340" height="96" rx="6" class="memory"/>
+  <text x="158" y="679" class="section-title">进程内组件</text>
+  <text x="158" y="702" class="small">OntologyRegistry · SQL Scope Policy</text>
+  <text x="158" y="724" class="small">ActionRepository · SQLAlchemy Async Engine</text>
+
+  <rect x="542" y="298" width="168" height="350" rx="8" class="pool"/>
+  <text x="560" y="328" class="section-title">默认线程池</text>
+  <text x="560" y="350" class="small">asyncio.to_thread</text>
+  <rect x="560" y="374" width="132" height="55" rx="5" class="thread-box"/>
+  <text x="576" y="397" class="label">Thread 1</text>
+  <text x="576" y="416" class="tiny">Semantic Runtime</text>
+  <rect x="560" y="442" width="132" height="55" rx="5" class="thread-box"/>
+  <text x="576" y="465" class="label">Thread 2</text>
+  <text x="576" y="484" class="tiny">Scoped SQL</text>
+  <rect x="560" y="510" width="132" height="55" rx="5" class="thread-box"/>
+  <text x="576" y="533" class="label">Thread ...</text>
+  <text x="576" y="552" class="tiny">阻塞查询卸载</text>
+  <text x="560" y="596" class="tiny">线程数由 asyncio</text>
+  <text x="560" y="615" class="tiny">默认 executor 管理</text>
+
+  <path d="M 478 496 C 520 496, 520 470, 560 470" class="dispatch"/>
+  <text x="492" y="458" class="tiny">to_thread 派发</text>
+
+  <path d="M 0 408 L 138 408" class="line"/>
+  <text x="12" y="392" class="small">来自 Gateway</text>
+  <text x="12" y="410" class="tiny">内部 HTTP</text>
+
+  <!-- Action Worker service -->
+  <rect x="840" y="115" width="710" height="760" rx="8" class="service-worker"/>
+  <text x="868" y="153" class="service-title">Action Worker 服务</text>
+  <text x="868" y="177" class="small">每个副本 1 个普通 Python 进程 · 无 HTTP 监听端口</text>
+
+  <rect x="866" y="198" width="658" height="642" rx="8" class="process"/>
+  <text x="888" y="229" class="section-title">进程：python -m app.semantic.worker × 1</text>
+
+  <rect x="888" y="250" width="420" height="548" rx="8" class="thread"/>
+  <text x="908" y="280" class="section-title">主线程 × 1</text>
+
+  <rect x="906" y="298" width="384" height="480" rx="8" class="loop"/>
+  <text x="926" y="328" class="section-title">asyncio Event Loop × 1</text>
+  <text x="926" y="350" class="small">当前单执行链：领取一条，完成后再领取下一条</text>
+
+  <rect x="928" y="372" width="340" height="72" rx="6" class="task-worker"/>
+  <text x="948" y="398" class="section-title">长期 Poll Loop Task × 1</text>
+  <text x="948" y="421" class="small">claim_ready；无任务时 asyncio.sleep</text>
+
+  <rect x="928" y="460" width="340" height="178" rx="6" class="task-worker"/>
+  <text x="948" y="486" class="section-title">当前 Execution 协程链 × 1</text>
+  <text x="948" y="511" class="label">1. Claim + Lease</text>
+  <text x="948" y="535" class="label">2. IAM 重新鉴权</text>
+  <text x="948" y="559" class="label">3. Scope / 目标 / 版本复核</text>
+  <text x="948" y="583" class="label">4. Domain API 执行或补偿</text>
+  <text x="948" y="607" class="label">5. 持久化最终状态</text>
+
+  <rect x="928" y="654" width="340" height="94" rx="6" class="memory"/>
+  <text x="948" y="681" class="section-title">进程内组件</text>
+  <text x="948" y="704" class="small">OntologyRegistry · ActionRepository</text>
+  <text x="948" y="726" class="small">HTTPX Clients · SQLAlchemy Async Engine</text>
+
+  <rect x="1332" y="298" width="168" height="246" rx="8" class="pool"/>
+  <text x="1350" y="328" class="section-title">默认线程池</text>
+  <text x="1350" y="350" class="small">asyncio.to_thread</text>
+  <rect x="1350" y="374" width="132" height="65" rx="5" class="thread-box"/>
+  <text x="1366" y="397" class="label">Target Reader</text>
+  <text x="1366" y="418" class="tiny">目标只读查询</text>
+  <rect x="1350" y="452" width="132" height="55" rx="5" class="thread-box"/>
+  <text x="1366" y="475" class="label">Thread ...</text>
+  <text x="1366" y="494" class="tiny">默认 executor</text>
+
+  <rect x="1332" y="568" width="168" height="134" rx="8" class="credential"/>
+  <text x="1350" y="596" class="section-title">Worker 专属凭证</text>
+  <text x="1350" y="620" class="tiny">IAM revalidation token</text>
+  <text x="1350" y="641" class="tiny">Domain API write token</text>
+  <line x1="1350" y1="655" x2="1482" y2="655" class="separator"/>
+  <text x="1350" y="679" class="tiny">Semantic API 不持有</text>
+
+  <path d="M 1268 558 C 1310 558, 1310 406, 1350 406" class="dispatch"/>
+  <text x="1284" y="391" class="tiny">目标读取 to_thread</text>
+
+  <!-- Shared data and external services -->
+  <rect x="50" y="930" width="340" height="120" rx="8" class="external"/>
+  <text x="76" y="965" class="section-title">租户业务数据库</text>
+  <text x="76" y="991" class="small">Semantic Query 只读</text>
+  <text x="76" y="1015" class="small">Worker 执行前读取目标快照</text>
+
+  <rect x="430" y="915" width="430" height="150" rx="8" class="memory"/>
+  <text x="456" y="950" class="section-title">Semantic Metadata DB</text>
+  <text x="456" y="976" class="small">当前默认：共享 SQLite 文件</text>
+  <text x="456" y="1000" class="small">proposals · executions · transitions · audit</text>
+  <text x="456" y="1024" class="small">两进程无直接任务派发 HTTP，通过 DB 协作</text>
+
+  <rect x="900" y="930" width="270" height="120" rx="8" class="external"/>
+  <text x="926" y="965" class="section-title">SaaS IAM</text>
+  <text x="926" y="991" class="small">执行前重新鉴权</text>
+  <text x="926" y="1015" class="small">返回 action-worker JWT</text>
+
+  <rect x="1210" y="930" width="340" height="120" rx="8" class="external"/>
+  <text x="1236" y="965" class="section-title">SaaS Domain API</text>
+  <text x="1236" y="991" class="small">生产写回、事务、幂等、版本控制</text>
+  <text x="1236" y="1015" class="small">只有 Action Worker 持有写调用凭证</text>
+
+  <!-- Cross-boundary arrows -->
+  <path d="M 306 778 L 306 900 L 220 900 L 220 930" class="db-line"/>
+  <text x="230" y="895" class="tiny">Scoped SQL 只读</text>
+
+  <path d="M 392 636 L 392 892 L 568 892 L 568 915" class="db-line"/>
+  <text x="416" y="886" class="tiny">Action 状态与审计写入</text>
+
+  <path d="M 928 408 L 810 408 L 810 890 L 722 890 L 722 915" class="line-purple"/>
+  <text x="735" y="882" class="tiny">轮询、Claim、Lease、结果回写</text>
+
+  <path d="M 1416 507 L 1512 507 L 1512 906 L 350 906 L 350 930" class="db-line"/>
+  <text x="1128" y="899" class="tiny">Worker 目标快照只读</text>
+
+  <path d="M 1098 638 L 1098 900 L 1035 900 L 1035 930" class="line-purple"/>
+  <text x="1047" y="890" class="tiny">HTTP：权限重验证</text>
+
+  <path d="M 1190 638 L 1190 900 L 1380 900 L 1380 930" class="line-purple"/>
+  <text x="1210" y="890" class="tiny">HTTP：写回 / 补偿</text>
+
+  <!-- Legend -->
+  <text x="54" y="1092" class="small">说明：Task 是协程调度单位，不是线程；虚线表示 asyncio.to_thread；本图省略 Gateway，仅保留其进入 Semantic API 的内部 HTTP 边界。</text>
+</svg>

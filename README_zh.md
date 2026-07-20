@@ -274,6 +274,17 @@ make down   # 停止并移除容器
 
 5. **访问地址**：http://localhost:2026
 
+#### SaaS 业务语义问数专线
+
+多租户 SaaS 问数应使用 `/api/runs/saas-query/*` 或 threaded
+`/api/threads/{thread_id}/runs/saas-query/*` 接口。该 profile 不经过 Lead Agent 或
+`general-purpose`，只使用独立鉴权的 Semantic API、带场地/项目 scope 的 SQL AST
+安全内核、受控 Semantic tools，以及负责审批后写回的隔离 Action Worker。
+`/sql-cross-validate/*` 继续作为受 A 阶段保护的兼容或 break-glass 路径。
+
+JWT 契约、IAM resolver、Ontology、部署变量、Action 状态机和安全边界见
+[SaaS Semantic Query 与 Action 实现说明](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)。
+
 ### 进阶配置
 #### Sandbox 模式
 
