@@ -287,18 +287,18 @@ def _validate_table_databases(table_names: list[str], source: TenantDataSource |
 def _validate_sql(sql: str, allow_write: bool = False) -> tuple[bool, str]:
     sql_upper = sql.upper().strip()
 
+    if not allow_write:
+        for keyword in UPDATE_INSERT_KEYWORDS:
+            pattern = r"(^|\s|;)\s*" + keyword + r"(\s|$|;)"
+            if re.search(pattern, sql_upper):
+                return False, f"Write operation blocked: {keyword}. Set MYSQL_ALLOW_WRITE=true to enable."
+
     for keyword in FORBIDDEN_KEYWORDS:
         if keyword == "SET" and allow_write and sql_upper.startswith(("UPDATE ", "INSERT ", "REPLACE ")):
             continue
         pattern = r"(^|\s|;)\s*" + keyword + r"(\s|$|;)"
         if re.search(pattern, sql_upper):
             return False, f"Forbidden operation detected: {keyword}"
-
-    if not allow_write:
-        for keyword in UPDATE_INSERT_KEYWORDS:
-            pattern = r"(^|\s|;)\s*" + keyword + r"(\s|$|;)"
-            if re.search(pattern, sql_upper):
-                return False, f"Write operation blocked: {keyword}. Set MYSQL_ALLOW_WRITE=true to enable."
 
     return True, ""
 

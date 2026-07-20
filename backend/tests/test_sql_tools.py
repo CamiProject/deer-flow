@@ -1,226 +1,7 @@
-"""Unit tests for SQL tools with auto-discovery support."""
+"""Unit tests for the current local SQL tool contract."""
 
 import os
 from unittest.mock import MagicMock, patch
-
-import pytest
-
-
-class TestExtractKeywords:
-    def test_extract_chinese_keywords(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("查询上个月活跃用户")
-        assert len(result) > 0
-        assert any("用户" in kw or "活跃" in kw or "上个月" in kw for kw in result)
-
-    def test_extract_english_keywords(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("find active users last month")
-        assert "active" in result
-        assert "users" in result
-        assert "last" in result
-        assert "month" in result
-
-    def test_extract_mixed_keywords(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("查询 users 表的订单数据")
-        assert "users" in result
-        assert any("订单" in kw or "数据" in kw for kw in result)
-
-    def test_filter_stop_words(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("请帮我查询所有的用户数据")
-        assert "请" not in result
-        assert "帮" not in result
-        assert "我" not in result
-        assert "的" not in result
-        assert len(result) > 0
-
-    def test_filter_english_stop_words(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("the users are active in the system")
-        assert "the" not in result
-        assert "are" not in result
-        assert "in" not in result
-        assert "users" in result
-        assert "active" in result
-        assert "system" in result
-
-    def test_empty_input(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("")
-        assert result == set()
-
-    def test_only_stop_words(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("的 的 的")
-        assert result == set()
-
-    def test_short_words_filtered(self):
-        from deerflow.tools.builtins.sql_tools import _extract_keywords
-
-        result = _extract_keywords("a b c d test")
-        assert "a" not in result
-        assert "b" not in result
-        assert "test" in result
-
-
-class TestExpandKeywords:
-    def test_expand_chinese_synonyms(self):
-        from deerflow.tools.builtins.sql_tools import _expand_keywords
-
-        result = _expand_keywords({"用户"})
-        assert "用户" in result
-        assert "user" in result
-        assert "users" in result
-        assert "member" in result
-        assert "account" in result
-
-    def test_expand_english_to_chinese(self):
-        from deerflow.tools.builtins.sql_tools import _expand_keywords
-
-        result = _expand_keywords({"user"})
-        assert "user" in result
-        assert "用户" in result
-        assert "users" in result
-
-    def test_expand_multiple_keywords(self):
-        from deerflow.tools.builtins.sql_tools import _expand_keywords
-
-        result = _expand_keywords({"用户", "订单"})
-        assert "user" in result
-        assert "order" in result
-        assert "users" in result
-        assert "orders" in result
-
-    def test_expand_no_match(self):
-        from deerflow.tools.builtins.sql_tools import _expand_keywords
-
-        result = _expand_keywords({"unknown_keyword"})
-        assert "unknown_keyword" in result
-        assert len(result) == 1
-
-    def test_expand_empty_set(self):
-        from deerflow.tools.builtins.sql_tools import _expand_keywords
-
-        result = _expand_keywords(set())
-        assert result == set()
-
-
-class TestCalculateRelevanceScore:
-    def test_exact_table_name_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"users"},
-            table_name="users",
-            columns=["id", "name", "email"],
-            table_comment="用户表"
-        )
-        assert result.score == 1.0
-        assert "table:users" in result.matched_keywords
-
-    def test_partial_table_name_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"user"},
-            table_name="user_activity",
-            columns=["id", "user_id", "action"],
-            table_comment=""
-        )
-        assert result.score > 0
-        assert "table_contains:user" in result.matched_keywords
-
-    def test_exact_column_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"email"},
-            table_name="users",
-            columns=["id", "name", "email"],
-            table_comment=""
-        )
-        assert result.score > 0
-        assert "column:email" in result.matched_keywords
-        assert "email" in result.column_hints
-
-    def test_partial_column_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"user"},
-            table_name="activity",
-            columns=["user_id", "user_name", "action"],
-            table_comment=""
-        )
-        assert result.score > 0
-        assert any("column_contains" in m for m in result.matched_keywords)
-
-    def test_comment_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"订单"},
-            table_name="t_data",
-            columns=["id", "value"],
-            table_comment="订单数据表"
-        )
-        assert result.score > 0
-        assert "comment:订单" in result.matched_keywords
-
-    def test_multiple_keyword_matches(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"user", "activity"},
-            table_name="user_activity",
-            columns=["user_id", "activity_type"],
-            table_comment=""
-        )
-        assert result.score > 0
-        assert len(result.matched_keywords) >= 2
-
-    def test_no_match(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"product"},
-            table_name="users",
-            columns=["id", "name"],
-            table_comment=""
-        )
-        assert result.score == 0.0
-        assert result.matched_keywords == []
-
-    def test_empty_keywords(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords=set(),
-            table_name="users",
-            columns=["id", "name"],
-            table_comment=""
-        )
-        assert result.score == 0.0
-
-    def test_normalized_score(self):
-        from deerflow.tools.builtins.sql_tools import _calculate_relevance_score
-
-        result = _calculate_relevance_score(
-            keywords={"a", "b", "c", "d", "e"},
-            table_name="a",
-            columns=["b"],
-            table_comment="c"
-        )
-        assert result.score <= 1.0
 
 
 class TestValidateSQL:
@@ -241,9 +22,7 @@ class TestValidateSQL:
     def test_valid_join_query(self):
         from deerflow.tools.builtins.sql_tools import _validate_sql
 
-        is_valid, error = _validate_sql(
-            "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id"
-        )
+        is_valid, error = _validate_sql("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id")
         assert is_valid is True
         assert error == ""
 
@@ -310,6 +89,13 @@ class TestValidateSQL:
         assert is_valid is True
         assert error == ""
 
+    def test_block_set_even_with_write_permission(self):
+        from deerflow.tools.builtins.sql_tools import _validate_sql
+
+        is_valid, error = _validate_sql("SET @tenant = 'other'", allow_write=True)
+        assert is_valid is False
+        assert "SET" in error
+
     def test_block_grant_even_with_write_permission(self):
         from deerflow.tools.builtins.sql_tools import _validate_sql
 
@@ -359,54 +145,15 @@ class TestAddLimitIfNeeded:
     def test_complex_select_with_join(self):
         from deerflow.tools.builtins.sql_tools import _add_limit_if_needed
 
-        result = _add_limit_if_needed(
-            "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id"
-        )
+        result = _add_limit_if_needed("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id")
         assert "LIMIT 100" in result
-
-
-class TestGetExcludedDatabases:
-    def test_default_excluded_databases(self):
-        from deerflow.tools.builtins.sql_tools import _get_excluded_databases
-
-        with patch.dict(os.environ, {}, clear=True):
-            if "MYSQL_EXCLUDED_DBS" in os.environ:
-                del os.environ["MYSQL_EXCLUDED_DBS"]
-            result = _get_excluded_databases()
-            assert "mysql" in result
-            assert "information_schema" in result
-            assert "performance_schema" in result
-            assert "sys" in result
-
-    def test_custom_excluded_databases(self):
-        from deerflow.tools.builtins.sql_tools import _get_excluded_databases
-
-        with patch.dict(os.environ, {"MYSQL_EXCLUDED_DBS": "custom_db,test_db"}):
-            result = _get_excluded_databases()
-            assert "custom_db" in result
-            assert "test_db" in result
-
-    def test_excluded_databases_with_spaces(self):
-        from deerflow.tools.builtins.sql_tools import _get_excluded_databases
-
-        with patch.dict(os.environ, {"MYSQL_EXCLUDED_DBS": "db1, db2 , db3 "}):
-            result = _get_excluded_databases()
-            assert "db1" in result
-            assert "db2" in result
-            assert "db3" in result
 
 
 class TestGetMysqlConnectionString:
     def test_connection_string_with_database(self):
         from deerflow.tools.builtins.sql_tools import _get_mysql_connection_string
 
-        with patch.dict(os.environ, {
-            "MYSQL_HOST": "localhost",
-            "MYSQL_PORT": "3306",
-            "MYSQL_USER": "root",
-            "MYSQL_PASSWORD": "password",
-            "MYSQL_DATABASE": "testdb"
-        }):
+        with patch.dict(os.environ, {"MYSQL_HOST": "localhost", "MYSQL_PORT": "3306", "MYSQL_USER": "root", "MYSQL_PASSWORD": "password", "MYSQL_DATABASE": "testdb"}):
             result = _get_mysql_connection_string()
             assert "testdb" in result
             assert "localhost" in result
@@ -416,12 +163,7 @@ class TestGetMysqlConnectionString:
     def test_connection_string_without_database(self):
         from deerflow.tools.builtins.sql_tools import _get_mysql_connection_string
 
-        env_vars = {
-            "MYSQL_HOST": "localhost",
-            "MYSQL_PORT": "3306",
-            "MYSQL_USER": "root",
-            "MYSQL_PASSWORD": "password"
-        }
+        env_vars = {"MYSQL_HOST": "localhost", "MYSQL_PORT": "3306", "MYSQL_USER": "root", "MYSQL_PASSWORD": "password"}
         with patch.dict(os.environ, env_vars, clear=True):
             if "MYSQL_DATABASE" in os.environ:
                 del os.environ["MYSQL_DATABASE"]
@@ -431,157 +173,10 @@ class TestGetMysqlConnectionString:
     def test_connection_string_with_explicit_database(self):
         from deerflow.tools.builtins.sql_tools import _get_mysql_connection_string
 
-        with patch.dict(os.environ, {
-            "MYSQL_HOST": "localhost",
-            "MYSQL_PORT": "3306",
-            "MYSQL_USER": "root",
-            "MYSQL_PASSWORD": "password",
-            "MYSQL_DATABASE": "defaultdb"
-        }):
+        with patch.dict(os.environ, {"MYSQL_HOST": "localhost", "MYSQL_PORT": "3306", "MYSQL_USER": "root", "MYSQL_PASSWORD": "password", "MYSQL_DATABASE": "defaultdb"}):
             result = _get_mysql_connection_string(database="otherdb")
             assert "otherdb" in result
             assert "defaultdb" not in result
-
-
-class TestSqlDiscoverDatabases:
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_discover_databases_success(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_discover_databases
-
-        mock_db = MagicMock()
-        mock_db.run.side_effect = [
-            [["db1"], ["db2"], ["mysql"], ["information_schema"]],
-            [["table1", 100, "comment1"], ["table2", 200, "comment2"]],
-            [["table3", 50, "comment3"]],
-        ]
-        mock_get_db.return_value = mock_db
-
-        result = sql_discover_databases.invoke({"include_tables": True})
-
-        assert "db1" in result
-        assert "db2" in result
-        assert "mysql" not in result
-        assert "information_schema" not in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_discover_databases_without_tables(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_discover_databases
-
-        mock_db = MagicMock()
-        mock_db.run.return_value = [["db1"], ["db2"], ["mysql"]]
-        mock_get_db.return_value = mock_db
-
-        result = sql_discover_databases.invoke({"include_tables": False})
-
-        assert "db1" in result
-        assert "db2" in result
-        assert "tables" not in result.lower() or "0 tables" in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_discover_databases_empty_result(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_discover_databases
-
-        mock_db = MagicMock()
-        mock_db.run.return_value = []
-        mock_get_db.return_value = mock_db
-
-        result = sql_discover_databases.invoke({"include_tables": True})
-
-        assert "No databases found" in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_discover_databases_error(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_discover_databases
-
-        mock_get_db.side_effect = Exception("Connection failed")
-
-        result = sql_discover_databases.invoke({"include_tables": True})
-
-        assert "Error" in result
-        assert "Connection failed" in result
-
-
-class TestSqlFindRelevantTables:
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_find_relevant_tables_success(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_find_relevant_tables
-
-        mock_db = MagicMock()
-        mock_db.run.side_effect = [
-            [["test_db"]],
-            [["users", "用户表"], ["orders", "订单表"], ["products", "商品表"]],
-            [["id", "name", "email"]],
-            [["id", "user_id", "total"]],
-            [["id", "name", "price"]],
-        ]
-        mock_get_db.return_value = mock_db
-
-        result = sql_find_relevant_tables.invoke({
-            "query_description": "查询用户",
-            "top_k": 5
-        })
-
-        assert "Keywords extracted" in result
-        assert "用户" in result or "user" in result.lower()
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_find_relevant_tables_with_specific_databases(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_find_relevant_tables
-
-        mock_db = MagicMock()
-        mock_db.run.side_effect = [
-            [["db1"], ["db2"]],
-            [["users", "用户表"]],
-            [["id", "name"]],
-        ]
-        mock_get_db.return_value = mock_db
-
-        result = sql_find_relevant_tables.invoke({
-            "query_description": "查询用户",
-            "databases": "db1"
-        })
-
-        assert "Keywords extracted" in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_find_relevant_tables_no_match(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_find_relevant_tables
-
-        mock_db = MagicMock()
-        mock_db.run.side_effect = [
-            [["test_db"]],
-            [["random_table", "随机表"]],
-            [["col1", "col2"]],
-        ]
-        mock_get_db.return_value = mock_db
-
-        result = sql_find_relevant_tables.invoke({
-            "query_description": "查询用户信息"
-        })
-
-        assert "No relevant tables found" in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_find_relevant_tables_empty_keywords(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_find_relevant_tables
-
-        result = sql_find_relevant_tables.invoke({
-            "query_description": "的的的"
-        })
-
-        assert "No relevant tables found" in result or "的的的" in result
-
-    @patch("deerflow.tools.builtins.sql_tools._get_db")
-    def test_find_relevant_tables_error(self, mock_get_db):
-        from deerflow.tools.builtins.sql_tools import sql_find_relevant_tables
-
-        mock_get_db.side_effect = Exception("Connection error")
-
-        result = sql_find_relevant_tables.invoke({
-            "query_description": "查询用户"
-        })
-
-        assert "Error" in result
 
 
 class TestSqlListTables:
@@ -617,17 +212,15 @@ class TestSqlListTables:
         assert "otherdb" in result
         assert "table1" in result
 
-    @patch("deerflow.tools.builtins.sql_tools.sql_discover_databases")
     @patch("deerflow.tools.builtins.sql_tools._get_default_database")
-    def test_list_tables_no_default_database(self, mock_get_default, mock_discover):
+    def test_list_tables_no_default_database(self, mock_get_default):
         from deerflow.tools.builtins.sql_tools import sql_list_tables
 
         mock_get_default.return_value = ""
-        mock_discover.return_value = "Available databases (2):\n\n📁 db1 (5 tables)\n   └─ table1, table2\n\n📁 db2 (3 tables)\n   └─ table3, table4\n"
 
         result = sql_list_tables.invoke({"database_name": ""})
 
-        assert "Available databases" in result or "db1" in result
+        assert "No database specified" in result
 
     @patch("deerflow.tools.builtins.sql_tools._get_db")
     @patch("deerflow.tools.builtins.sql_tools._get_default_database")
@@ -797,7 +390,8 @@ class TestSqlQuery:
         result = sql_query.invoke({"query": "SELECT * FROM invalid_db.users"})
 
         assert "Unknown database" in result
-        assert "sql_discover_databases" in result
+        assert "Please check the database name" in result
+        assert "sql_discover_databases" not in result
 
     @patch("deerflow.tools.builtins.sql_tools._get_db")
     @patch("deerflow.tools.builtins.sql_tools._get_default_database")
@@ -873,14 +467,15 @@ class TestSQLToolsList:
 
         tool_names = [tool.name for tool in SQL_TOOLS]
 
-        assert "sql_discover_databases" in tool_names
-        assert "sql_find_relevant_tables" in tool_names
-        assert "sql_list_tables" in tool_names
-        assert "sql_schema" in tool_names
-        assert "sql_query" in tool_names
-        assert "sql_query_checker" in tool_names
+        assert tool_names == [
+            "sql_show_databases",
+            "sql_list_tables",
+            "sql_schema",
+            "sql_query",
+            "sql_query_checker",
+        ]
 
     def test_sql_tools_count(self):
         from deerflow.tools.builtins.sql_tools import SQL_TOOLS
 
-        assert len(SQL_TOOLS) == 6
+        assert len(SQL_TOOLS) == 5

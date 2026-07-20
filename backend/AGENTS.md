@@ -342,6 +342,13 @@ tools and `mysql-validator` receives only `explain_metric`. Full deployment and 
 contracts are documented in
 [`docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md`](../docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md).
 
+The built-in SQL tool contract is intentionally limited to `sql_show_databases`,
+`sql_list_tables`, `sql_schema`, `sql_query`, and `sql_query_checker`. Legacy keyword
+extraction, relevance matching, and auto-discovery tools are not part of the supported
+surface and must not be restored through compatibility tests. Local-only
+`MYSQL_ALLOW_WRITE=true` permits `UPDATE`, `INSERT`, and `REPLACE`; standalone `SET`
+remains forbidden, and SaaS tenant mode ignores the local write flag.
+
 ### Gateway API (`app/gateway/`)
 
 FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWAY_ENABLE_DOCS=false` to disable `/docs`, `/redoc`, and `/openapi.json` in production (default: enabled).
