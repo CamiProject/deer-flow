@@ -63,9 +63,9 @@ export const zhCN: Translations = {
 
   // Welcome
   welcome: {
-    greeting: "欢迎回到纳泽智能问数工作台！",
+    greeting: "欢迎回到Cami智能问数工作台！",
     description:
-      "欢迎使用 Naze - DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nNaze - DeerFlow 可以帮你搜索网络、分析能碳平台数据报表，还能为你生成幻灯片、\n图片、视频、播客及网页等。",
+      "欢迎使用 Cami-DeerFlow，基于DeerFlow开源底座打造的任务交付型智能体。可以做你SaaS平台的分析决策引擎。支持内置和自定义的 Skills，还能搜索互联网、生成幻灯片、图片、视频、播客及网页等。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:

@@ -65,7 +65,7 @@ export const enUS: Translations = {
   welcome: {
     greeting: "Hello, again!",
     description:
-      "Welcome to Naze - DeerFlow, an open source super agent. With built-in and custom skills, Naze - DeerFlow helps you search on the web, analyze energy carbon platform data reports, and generate artifacts like slides, images, videos, podcasts, and web pages.",
+      "Welcome to Cami-DeerFlow, a task-delivery intelligent agent built on the open-source DeerFlow foundation. It can serve as the analytical decision-making engine for your SaaS platform. It supports both built-in and custom Skills, and can also search the internet, as well as generate slides, images, videos, podcasts, web pages, and more.",
 
     createYourOwnSkill: "Create Your Own Skill",
     createYourOwnSkillDescription:
