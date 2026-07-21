@@ -50,6 +50,15 @@ def test_development_compose_isolates_action_worker_credentials():
     assert worker_env["DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN"] != ""
 
 
+def test_semantic_api_healthchecks_use_runtime_python():
+    for compose_name in ("docker-compose.yaml", "docker-compose-dev.yaml"):
+        healthcheck = _compose(compose_name)["services"]["semantic-api"]["healthcheck"]["test"]
+
+        assert healthcheck[:2] == ["CMD", "python"]
+        assert "urllib.request.urlopen" in healthcheck[3]
+        assert "http://localhost:8003/health" in healthcheck[3]
+
+
 def test_local_launcher_starts_internal_semantic_api_and_optional_worker():
     script = (ROOT / "scripts" / "serve.sh").read_text(encoding="utf-8")
 

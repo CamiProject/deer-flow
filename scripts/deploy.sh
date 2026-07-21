@@ -393,9 +393,11 @@ echo -e "${BLUE}Sandbox mode: $sandbox_mode${NC}"
 echo -e "${BLUE}Runtime: Gateway embedded agent runtime${NC}"
 
 services="redis semantic-api action-worker frontend gateway nginx"
+build_services="gateway frontend"
 
 if [ "$sandbox_mode" = "provisioner" ]; then
     services="$services provisioner"
+    build_services="$build_services provisioner"
 fi
 
 # ── DEER_FLOW_DOCKER_SOCKET (aio / pure-DooD mode only) ──────────────────────
@@ -433,7 +435,11 @@ else
     echo "Building images and starting containers..."
     echo ""
     # shellcheck disable=SC2086
-    "${COMPOSE_CMD[@]}" up --build -d --remove-orphans $services
+    "${COMPOSE_CMD[@]}" build $build_services
+    # Build the shared backend image before semantic-api and action-worker are
+    # resolved, otherwise a fresh host tries to pull deer-flow-backend:local.
+    # shellcheck disable=SC2086
+    "${COMPOSE_CMD[@]}" up -d --remove-orphans $services
 fi
 
 echo ""

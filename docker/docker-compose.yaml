@@ -178,7 +178,7 @@ services:
       - deer-flow
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 6

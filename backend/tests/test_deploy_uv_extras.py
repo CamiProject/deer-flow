@@ -181,6 +181,18 @@ def test_deploy_uses_dotenv_without_sourcing_shell_syntax(tmp_path):
     assert str(worktree / ".env") in args
 
 
+def test_deploy_builds_shared_images_before_starting_services():
+    """Fresh deployments must build shared local images before Compose resolves services."""
+    script = (REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    build_command = '"${COMPOSE_CMD[@]}" build $build_services'
+    up_command = '"${COMPOSE_CMD[@]}" up -d --remove-orphans $services'
+
+    assert build_command in script
+    assert up_command in script
+    assert script.index(build_command) < script.rindex(up_command)
+    assert '"${COMPOSE_CMD[@]}" up --build' not in script
+
+
 def test_deploy_build_auto_detects_postgres_extra_with_python_fallback(tmp_path):
     """Production deploy hosts may have python but no runnable python3."""
     worktree = tmp_path / "repo"
