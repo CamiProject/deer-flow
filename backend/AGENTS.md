@@ -307,6 +307,11 @@ reuse Lead Agent or `general-purpose`. Gateway verifies the internal caller and 
 short-lived signed `X-SaaS-Authorization-Context`, strips client-forged protected
 context, binds thread history to principal/tenant/system/scope/version, and keeps the
 raw JWT in runtime-only secret context.
+During LangGraph node execution, authoritative run context is read from
+`configurable.__pregel_runtime.context`; the top-level `config.context` is only a
+compatibility input because LangGraph does not preserve it as a top-level node config
+field. This is required for forwarding the verified SaaS JWT and correlation fields to
+Semantic API without persisting those secrets in checkpoints.
 
 The A-phase safety kernel lives in:
 

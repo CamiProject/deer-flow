@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
@@ -48,10 +49,15 @@ class _SemanticAgentRun:
 def _runtime_config(config: RunnableConfig | dict | None) -> dict[str, Any]:
     if not config:
         return {}
-    resolved = dict(config.get("configurable", {}) or {})
+    configurable = config.get("configurable", {}) or {}
+    resolved = dict(configurable) if isinstance(configurable, Mapping) else {}
     context = config.get("context", {}) or {}
-    if isinstance(context, dict):
+    if isinstance(context, Mapping):
         resolved.update(context)
+    parent_runtime = configurable.get("__pregel_runtime") if isinstance(configurable, Mapping) else None
+    runtime_context = getattr(parent_runtime, "context", None)
+    if isinstance(runtime_context, Mapping):
+        resolved.update(runtime_context)
     metadata = config.get("metadata", {}) or {}
     if isinstance(metadata, dict) and "model_name" in metadata and "model_name" not in resolved:
         resolved["model_name"] = metadata["model_name"]

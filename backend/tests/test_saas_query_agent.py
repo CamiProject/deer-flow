@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.runtime import Runtime
 
+from deerflow.runtime.secret_context import SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY
 from deerflow.semantic.client import SemanticClientError
 from deerflow.subagents.config import SubagentConfig
 
@@ -46,6 +48,34 @@ def _config(name):
         max_turns=5,
         timeout_seconds=30,
     )
+
+
+@pytest.mark.parametrize(
+    "legacy_context",
+    [None, {"run_id": "stale-run", "thread_id": "stale-thread"}],
+)
+def test_saas_query_runtime_config_reads_authoritative_pregel_context(legacy_context):
+    from deerflow.agents.saas_query import agent as module
+
+    runtime_context = {
+        "run_id": "run-1",
+        "thread_id": "thread-1",
+        SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY: "signed-user-context",
+    }
+    config = {
+        "configurable": {
+            "thread_id": "spoofed-thread",
+            "__pregel_runtime": Runtime(context=runtime_context, store=None),
+        },
+    }
+    if legacy_context is not None:
+        config["context"] = legacy_context
+
+    resolved = module._runtime_config(config)
+
+    assert resolved["run_id"] == "run-1"
+    assert resolved["thread_id"] == "thread-1"
+    assert resolved[SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] == "signed-user-context"
 
 
 @pytest.mark.asyncio
