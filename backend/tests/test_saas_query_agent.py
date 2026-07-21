@@ -76,6 +76,42 @@ def test_saas_query_runtime_config_reads_authoritative_pregel_context(legacy_con
     assert resolved["run_id"] == "run-1"
     assert resolved["thread_id"] == "thread-1"
     assert resolved[SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] == "signed-user-context"
+    assert "__pregel_runtime" not in resolved
+    assert "context" not in resolved
+
+
+@pytest.mark.asyncio
+async def test_saas_query_graph_injects_runnable_config_into_node(monkeypatch):
+    from deerflow.agents.saas_query import agent as module
+
+    captured = {}
+
+    async def coverage(_question, runtime):
+        captured.update(runtime)
+        return {"objects": [], "metrics": [], "actions": []}
+
+    runtime_context = {
+        "run_id": "run-1",
+        "thread_id": "thread-1",
+        SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY: "signed-user-context",
+        "app_config": _app_config(),
+    }
+    config = {
+        "context": runtime_context,
+        "configurable": {
+            "thread_id": "thread-1",
+            "__pregel_runtime": Runtime(context=runtime_context, store=None),
+        },
+    }
+    monkeypatch.setattr(module, "_resolve_semantic_coverage", coverage)
+    monkeypatch.setenv("DEER_FLOW_SAAS_QUERY_SQL_FALLBACK_MODE", "disabled")
+
+    graph = module.make_saas_query_agent(config, app_config=_app_config())
+    await graph.ainvoke({"messages": [HumanMessage(content="query sites")]}, config=config)
+
+    assert captured["run_id"] == "run-1"
+    assert captured["thread_id"] == "thread-1"
+    assert captured[SAAS_AUTHORIZATION_TOKEN_CONTEXT_KEY] == "signed-user-context"
 
 
 @pytest.mark.asyncio

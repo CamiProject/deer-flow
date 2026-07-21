@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,10 +39,18 @@ class _SqlAgentRun:
 def _runtime_config(config: RunnableConfig | dict | None) -> dict[str, Any]:
     if not config:
         return {}
-    cfg = dict(config.get("configurable", {}) or {})
+    configurable = config.get("configurable", {}) or {}
+    cfg = {key: value for key, value in configurable.items() if key not in {"__pregel_runtime", "context"}} if isinstance(configurable, Mapping) else {}
+    configurable_context = configurable.get("context") if isinstance(configurable, Mapping) else None
+    if isinstance(configurable_context, Mapping):
+        cfg.update(configurable_context)
     context = config.get("context", {}) or {}
-    if isinstance(context, dict):
+    if isinstance(context, Mapping):
         cfg.update(context)
+    parent_runtime = configurable.get("__pregel_runtime") if isinstance(configurable, Mapping) else None
+    runtime_context = getattr(parent_runtime, "context", None)
+    if isinstance(runtime_context, Mapping):
+        cfg.update(runtime_context)
     metadata = config.get("metadata", {}) or {}
     if isinstance(metadata, dict):
         for key in ("model_name",):
@@ -253,7 +262,7 @@ def _report_usage(runtime_context: dict[str, Any], runs: list[_SqlAgentRun]) -> 
         journal.record_external_llm_usage_records(records)
 
 
-async def _cross_validate_node(state: ThreadState, config: RunnableConfig | None = None) -> dict[str, Any]:
+async def _cross_validate_node(state: ThreadState, config: RunnableConfig) -> dict[str, Any]:
     runtime = _runtime_config(config)
     app_config = runtime.get("app_config") or get_app_config()
     thread_id = runtime.get("thread_id")

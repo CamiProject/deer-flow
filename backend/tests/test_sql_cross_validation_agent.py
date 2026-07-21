@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
+from langgraph.runtime import Runtime
 
 from deerflow.subagents.config import SubagentConfig
 
@@ -70,6 +71,54 @@ def sql_module(monkeypatch):
     monkeypatch.setattr(module, "SubagentResult", FakeSubagentResult)
     monkeypatch.setattr(module, "SubagentStatus", FakeSubagentStatus)
     return module
+
+
+@pytest.mark.asyncio
+async def test_sql_cross_validation_graph_injects_runnable_config_into_node(monkeypatch, sql_module):
+    module = sql_module
+    captured = []
+
+    async def run_subagent(**kwargs):
+        captured.append(kwargs["runtime_context"])
+        return module._SqlAgentRun(
+            role=kwargs["role"],
+            subagent_type=kwargs["subagent_type"],
+            result=FakeSubagentResult(
+                task_id=kwargs["subagent_type"],
+                trace_id="trace",
+                status=FakeSubagentStatus.COMPLETED,
+                result="ok",
+            ),
+        )
+
+    async def summarize(**_kwargs):
+        return "ok"
+
+    runtime_context = {
+        "run_id": "run-1",
+        "thread_id": "thread-1",
+        "tenant_code": "tenant-safe",
+        "app_config": _app_config(),
+    }
+    config = {
+        "context": runtime_context,
+        "configurable": {
+            "thread_id": "thread-1",
+            "__pregel_runtime": Runtime(context=runtime_context, store=None),
+        },
+    }
+    monkeypatch.setattr(module, "_run_subagent", run_subagent)
+    monkeypatch.setattr(module, "_summarize_final_answer", summarize)
+
+    graph = module.make_sql_cross_validation_agent(config, app_config=_app_config())
+    await graph.ainvoke({"messages": [HumanMessage(content="query data")]}, config=config)
+
+    assert len(captured) == 2
+    assert all(context["run_id"] == "run-1" for context in captured)
+    assert all(context["thread_id"] == "thread-1" for context in captured)
+    assert all(context["tenant_code"] == "tenant-safe" for context in captured)
+    assert all("__pregel_runtime" not in context for context in captured)
+    assert all("context" not in context for context in captured)
 
 
 @pytest.mark.asyncio

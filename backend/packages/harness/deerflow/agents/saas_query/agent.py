@@ -50,7 +50,10 @@ def _runtime_config(config: RunnableConfig | dict | None) -> dict[str, Any]:
     if not config:
         return {}
     configurable = config.get("configurable", {}) or {}
-    resolved = dict(configurable) if isinstance(configurable, Mapping) else {}
+    resolved = {key: value for key, value in configurable.items() if key not in {"__pregel_runtime", "context"}} if isinstance(configurable, Mapping) else {}
+    configurable_context = configurable.get("context") if isinstance(configurable, Mapping) else None
+    if isinstance(configurable_context, Mapping):
+        resolved.update(configurable_context)
     context = config.get("context", {}) or {}
     if isinstance(context, Mapping):
         resolved.update(context)
@@ -340,7 +343,7 @@ async def _record_shadow_sql(
 
 async def _saas_query_node(
     state: ThreadState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig,
 ) -> dict[str, Any]:
     runtime = _runtime_config(config)
     app_config = runtime.get("app_config") or get_app_config()

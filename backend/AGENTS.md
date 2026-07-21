@@ -312,6 +312,9 @@ During LangGraph node execution, authoritative run context is read from
 compatibility input because LangGraph does not preserve it as a top-level node config
 field. This is required for forwarding the verified SaaS JWT and correlation fields to
 Semantic API without persisting those secrets in checkpoints.
+Dedicated graph nodes declare their injected `config` parameter as `RunnableConfig`
+without an optional default; under postponed annotations, the optional form is not
+recognized by the current LangGraph node-signature inspector and would receive `None`.
 
 The A-phase safety kernel lives in:
 
