@@ -9,6 +9,8 @@
 #   with `DEER_FLOW_HOME` when you need a different writable data directory.
 # - Environment variables are available for all field values. Example: `api_key: $OPENAI_API_KEY`
 # - The `use` path is a string that looks like "package_name.sub_package_name.module_name:class_name/variable_name".
+# - SaaS/Semantic/Action deployment settings use the project-root `.env`;
+#   see `.env.example`. They are not YAML fields.
 
 # ============================================================================
 # Config Version (used to detect outdated config files)
@@ -1529,7 +1531,10 @@ skill_evolution:
 #   cd backend && uv sync --all-packages --extra postgres
 #   (--all-packages propagates the extra into workspace members — see PR #2584)
 #
-# NOTE: When both `checkpointer` and `database` are configured,
+# NOTE: `database` controls DeerFlow application data only. Semantic and tenant
+# databases use DEER_FLOW_SEMANTIC_DATABASE_URL and SAAS_CONFIG_DB_* in `.env`.
+#
+# When both `checkpointer` and `database` are configured,
 # `checkpointer` takes precedence for the LangGraph checkpointer and Store;
 # `database` still controls DeerFlow application data.
 # If you use `database`, you can remove the `checkpointer` section.
