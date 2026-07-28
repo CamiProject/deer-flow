@@ -118,7 +118,7 @@ Rule of thumb: **root `make` = the full application**; **`backend/Makefile` and 
 - Project overview & usage → **[README.md](README.md)** (translations: `README_zh.md`,
   `README_ja.md`, `README_fr.md`, `README_ru.md`)
 - Security policy → **[SECURITY.md](SECURITY.md)**
-- SaaS scoped query / Ontology / Action runtime → **[docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)**
+- SaaS scoped query, Ontology, and Action execution are part of the backend runtime architecture.
 - Changes → **[CHANGELOG.md](CHANGELOG.md)**
 - Cutting a release → **[RELEASING.md](RELEASING.md)**
 

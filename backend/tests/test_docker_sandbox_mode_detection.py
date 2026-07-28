@@ -104,3 +104,41 @@ sandbox:
 """.strip()
 
     assert _detect_mode_with_config(config) == "local"
+
+
+def _detect_uv_extras_with_config(config_content: str) -> str:
+    """Resolve Docker development extras from a temporary config file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "config.yaml"
+        config_path.write_text(config_content, encoding="utf-8")
+        command = f"source '{SCRIPT_PATH}' && unset UV_EXTRAS && export DEER_FLOW_CONFIG_PATH='{config_path}' && load_uv_extras_from_config >/dev/null && printf '%s' \"${{UV_EXTRAS:-}}\""
+        return subprocess.check_output(
+            [BASH_EXECUTABLE, "-lc", command],
+            text=True,
+            encoding="utf-8",
+        ).strip()
+
+
+def test_docker_start_detects_model_routing_extra_from_config():
+    """Docker development startup should install FAISS when routing is enabled."""
+    config = """
+model_routing:
+  mode: shadow
+""".strip()
+
+    assert _detect_uv_extras_with_config(config) == "model-routing"
+
+
+def test_docker_start_respects_explicit_uv_extras():
+    """An explicit UV_EXTRAS value remains authoritative for Docker startup."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "config.yaml"
+        config_path.write_text("model_routing:\n  mode: shadow\n", encoding="utf-8")
+        command = f"source '{SCRIPT_PATH}' && export UV_EXTRAS='postgres' && export DEER_FLOW_CONFIG_PATH='{config_path}' && load_uv_extras_from_config >/dev/null && printf '%s' \"${{UV_EXTRAS:-}}\""
+        output = subprocess.check_output(
+            [BASH_EXECUTABLE, "-lc", command],
+            text=True,
+            encoding="utf-8",
+        ).strip()
+
+    assert output == "postgres"

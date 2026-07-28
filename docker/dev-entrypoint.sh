@@ -46,7 +46,7 @@ if [ -n "${UV_EXTRAS:-}" ]; then
         # Two patterns: leading non-letter, or any non-[A-Za-z0-9_-] character.
         case "$raw" in
             [!A-Za-z]* | *[!A-Za-z0-9_-]*)
-                echo "[startup] UV_EXTRAS entry '$raw' is invalid (must match [A-Za-z][A-Za-z0-9_-]*) — aborting" >&2
+                echo "[startup] UV_EXTRAS entry '$raw' is invalid (must match [A-Za-z][A-Za-z0-9_-]*) -- aborting" >&2
                 exit 1
                 ;;
         esac

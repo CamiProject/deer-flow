@@ -203,6 +203,32 @@ DeerFlow 新近集成了 BytePlus 自研的智能搜索与抓取工具集——[
 
    </details>
 
+   #### 可选的模型路由
+
+   DeerFlow 可以在每个新 Run 创建前，将请求路由到配置的
+   `simple_model` 或 `complex_model`，默认关闭。启用时，两个模型名必须已经存在于
+   `models` 配置中：
+
+   ```yaml
+   model_routing:
+     mode: shadow  # disabled | shadow | enforce
+     simple_model: configured-simple-model
+     complex_model: configured-complex-model
+   ```
+
+   路由启用后先执行确定性规则，规则无法判断时再使用本地 FAISS 相似样本检索；检索
+   不可用或结果冲突时保守使用 `complex_model`。安装可选依赖并构建索引：
+
+   ```bash
+   uv sync --project backend --extra model-routing
+   uv run --project backend python scripts/build_model_routing_index.py
+   ```
+
+   构建命令会同时生成 FAISS 索引和版本化元数据清单，需将清单保留在配置的索引路径旁。
+   样本模板见 `docs/model_routing/route-examples.example.jsonl`，使用前应先脱敏和复核。
+   建议先使用 `shadow` 观察，再切换 `enforce`。模型路由不会授予 Semantic Scope 或
+   Action 写权限；扩展和回滚必须保持路由决策可审计，并保留 `complex` 安全回退。
+
 ### 运行应用
 
 #### 部署建议与资源规划
@@ -282,8 +308,8 @@ make down   # 停止并移除容器
 安全内核、受控 Semantic tools，以及负责审批后写回的隔离 Action Worker。
 `/sql-cross-validate/*` 继续作为受 A 阶段保护的兼容或 break-glass 路径。
 
-JWT 契约、IAM resolver、Ontology、部署变量、Action 状态机和安全边界见
-[SaaS Semantic Query 与 Action 实现说明](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)。
+SaaS 集成范围包括 JWT 契约、IAM resolver、Ontology、部署变量、Action 状态机和
+安全边界。
 
 ### 进阶配置
 #### Sandbox 模式

@@ -155,6 +155,20 @@ def test_detect_from_config_memory_stream_bridge_returns_no_extras(tmp_path):
     assert detect.detect_from_config(cfg) == []
 
 
+def test_detect_from_config_model_routing_enables_faiss_extra(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model_routing:\n  mode: shadow\n", encoding="utf-8")
+
+    assert detect.detect_from_config(cfg) == ["model-routing"]
+
+
+def test_detect_from_config_disabled_model_routing_returns_no_extra(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model_routing:\n  mode: disabled\n", encoding="utf-8")
+
+    assert detect.detect_from_config(cfg) == []
+
+
 def test_detect_from_config_combines_postgres_and_redis(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("database:\n  backend: postgres\nstream_bridge:\n  type: redis\n")

@@ -213,6 +213,37 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 
    </details>
 
+   #### Optional model routing
+
+   DeerFlow can route each new Run to a configured `simple_model` or
+   `complex_model`. It is disabled by default. To enable it, add
+   `model_routing` to `config.yaml`; both model names must already exist under
+   `models`.
+
+   ```yaml
+   model_routing:
+     mode: shadow  # disabled | shadow | enforce
+     simple_model: configured-simple-model
+     complex_model: configured-complex-model
+   ```
+
+   Enabled routing uses deterministic rules first and local FAISS similarity
+   search only when the rules are undecided. Ambiguous or unavailable search
+   falls back to `complex_model`. Install the optional dependency with
+   `uv sync --project backend --extra model-routing`, copy and review
+   `docs/model_routing/route-examples.example.jsonl`, then build the index:
+
+   ```bash
+   uv run --project backend python scripts/build_model_routing_index.py
+   ```
+
+   The build command writes the FAISS index and its versioned metadata manifest together;
+   keep the manifest beside the configured index path.
+
+   Use `shadow` before `enforce`; the router selects a model but does not grant
+   Semantic Scope or Action write permission. Extensions and rollbacks must
+   preserve the auditable routing contract and fail-safe `complex` fallback.
+
 ### Running the Application
 
 #### Deployment Sizing
@@ -331,9 +362,8 @@ and an isolated Action Worker for approved writes. The older
 `/sql-cross-validate/*` route remains available as an A-protected compatibility or
 break-glass path.
 
-See [SaaS Semantic Query and Action Implementation](docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md)
-for the JWT contract, IAM resolver APIs, Ontology policy, deployment variables,
-Action lifecycle, and security boundaries.
+The SaaS integration covers the JWT contract, IAM resolver APIs, Ontology policy,
+deployment variables, Action lifecycle, and security boundaries.
 
 #### Docker Production Deployment
 

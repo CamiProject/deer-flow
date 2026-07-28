@@ -25,7 +25,7 @@ load_proxy_env_from_dotenv() {
         return
     fi
 
-    for var in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    for var in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy UV_EXTRAS; do
         if [ -z "${!var+x}" ]; then
             line="$(grep -E "^[[:space:]]*${var}=" "$env_file" | tail -n 1 || true)"
             if [ -n "$line" ]; then
@@ -39,6 +39,46 @@ load_proxy_env_from_dotenv() {
             fi
         fi
     done
+}
+
+load_uv_extras_from_config() {
+    # Respect an explicit environment value; otherwise derive optional extras
+    # from config.yaml so Docker development matches make dev and production.
+    if [ -n "${UV_EXTRAS:-}" ]; then
+        return
+    fi
+
+    local detect_python=""
+    local uv_extras_flags=""
+    local uv_extras=""
+    local python_cmd
+    for python_cmd in python3 python; do
+        if command -v "$python_cmd" >/dev/null 2>&1 && \
+            "$python_cmd" -c 'import sys; sys.version_info >= (3, 6) or sys.exit(1)' >/dev/null 2>&1; then
+            detect_python="$python_cmd"
+            break
+        fi
+    done
+    [ -n "$detect_python" ] || return
+
+    uv_extras_flags="$($detect_python "$PROJECT_ROOT/scripts/detect_uv_extras.py" 2>/dev/null || true)"
+    set -- $uv_extras_flags
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--extra" ] && [ "$#" -gt 1 ]; then
+            if [ -z "$uv_extras" ]; then
+                uv_extras="$2"
+            else
+                uv_extras="$uv_extras,$2"
+            fi
+            shift 2
+        else
+            shift
+        fi
+    done
+    if [ -n "$uv_extras" ]; then
+        export UV_EXTRAS="$uv_extras"
+        echo -e "${BLUE}Auto-detected UV_EXTRAS=$UV_EXTRAS from config.yaml${NC}"
+    fi
 }
 
 detect_sandbox_mode() {
@@ -261,6 +301,7 @@ start() {
     fi
 
     load_proxy_env_from_dotenv
+    load_uv_extras_from_config
 
     echo "Building and starting containers..."
     cd "$DOCKER_DIR" && $COMPOSE_CMD up --build -d --remove-orphans $services

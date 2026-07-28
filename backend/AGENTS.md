@@ -214,6 +214,20 @@ tool graph or subagent executor during state/schema imports.
 - `is_plan_mode` - Enable TodoList middleware
 - `subagent_enabled` - Enable task delegation tool
 
+**Gateway model routing** (`config.yaml -> model_routing`):
+- Optional, disabled by default; `shadow` records decisions and `enforce` applies them
+- When enabled, deterministic rules run first and undecided requests use local FAISS search
+- Only `simple` / `complex` are route types; risk, difficulty, scale, and delivery remain
+  structured signals for future policy expansion
+- `simple_model` and `complex_model` must reference entries in `models`; routing does not
+  change Semantic Scope or Action authorization
+- Install the optional dependency with `uv sync --extra model-routing`; build a reviewed,
+  redacted sample index and its manifest with `scripts/build_model_routing_index.py`
+- `make docker-start` auto-detects the extra from `config.yaml`; explicit `UV_EXTRAS` still
+  takes precedence
+- The implementation is in `app/gateway/model_routing/`; keep the router independent from
+  Semantic API, Action Worker, Metadata DB, and credentials
+
 ### Middleware Chain
 
 Lead-agent middlewares are assembled in strict order across three functions: the shared base in `packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` (`_build_runtime_middlewares`, exposed via `build_lead_runtime_middlewares`), then the lead-only middlewares appended in `packages/harness/deerflow/agents/lead_agent/agent.py` (`build_middlewares`). Items marked *(optional)* are appended only when their config/runtime condition holds, so the live chain length varies.
@@ -346,9 +360,8 @@ projected through the Ontology `result_fields` allowlist.
 
 The existing `/sql-cross-validate/*` routes remain A-protected compatibility/break-glass
 paths. SQL SubAgents set `skills=[]`; semantic-mode `mysql-query` receives only Semantic
-tools and `mysql-validator` receives only `explain_metric`. Full deployment and JWT/IAM
-contracts are documented in
-[`docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md`](../docs/SAAS_SEMANTIC_QUERY_ACTION_IMPLEMENTATION.md).
+tools and `mysql-validator` receives only `explain_metric`. Deployment and JWT/IAM
+contracts are part of the SaaS semantic query and Action runtime boundary.
 
 The built-in SQL tool contract is intentionally limited to `sql_show_databases`,
 `sql_list_tables`, `sql_schema`, `sql_query`, and `sql_query_checker`. Legacy keyword

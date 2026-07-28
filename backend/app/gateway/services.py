@@ -35,6 +35,7 @@ from app.gateway.internal_auth import (
     get_trusted_saas_authorization_token,
     get_trusted_saas_context,
 )
+from app.gateway.model_routing import ModelRoutingConfigError, build_routing_input, route_model
 from app.gateway.utils import sanitize_log_param
 from deerflow.config.app_config import get_app_config
 from deerflow.runtime import (
@@ -810,20 +811,11 @@ async def start_run(
     if context_overrides:
         body_context.update(context_overrides)
     model_name = body_context.get("model_name")
+    app_config = get_app_config()
 
     # Coerce non-string model_name values to str before truncation.
     if model_name is not None and not isinstance(model_name, str):
         model_name = str(model_name)
-
-    # Validate model against the allowlist when a model_name is provided.
-    if model_name:
-        app_config = get_app_config()
-        resolved = app_config.get_model_config(model_name)
-        if resolved is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model {model_name!r} is not in the configured model allowlist",
-            )
 
     owner_user_id = get_trusted_internal_owner_user_id(request)
     if saas_authorization is not None:
@@ -866,6 +858,36 @@ async def start_run(
             metadata=safe_body_metadata,
         )
 
+    routing_decision = None
+    if app_config.model_routing.mode != "disabled":
+        try:
+            routing_decision = await route_model(
+                build_routing_input(
+                    body.input,
+                    endpoint=effective_assistant_id,
+                    assistant_id=effective_assistant_id,
+                    action_allowed=saas_authorization is not None,
+                ),
+                app_config=app_config,
+            )
+        except ModelRoutingConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if app_config.model_routing.mode == "enforce":
+            assert routing_decision is not None and routing_decision.model_name is not None
+            model_name = routing_decision.model_name
+            body_context["model_name"] = model_name
+
+    # Validate the effective model against the allowlist. In enforce mode this
+    # validates the server-selected model; in other modes it preserves the
+    # existing client/default model behavior.
+    if model_name:
+        resolved = app_config.get_model_config(model_name)
+        if resolved is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {model_name!r} is not in the configured model allowlist",
+            )
+
     owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
     try:
         try:
@@ -877,6 +899,7 @@ async def start_run(
                     metadata={
                         **safe_body_metadata,
                         **({"run_profile": effective_assistant_id} if effective_assistant_id in _TRUSTED_SAAS_ASSISTANT_IDS else {}),
+                        **({"model_routing": routing_decision.as_metadata()} if routing_decision is not None else {}),
                         **(
                             {
                                 "scope_hash": saas_authorization.scope_hash,
@@ -941,6 +964,9 @@ async def start_run(
         # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
         is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
         merge_run_context_overrides(config, body_context, internal=is_internal_caller)
+        if routing_decision is not None and app_config.model_routing.mode == "enforce":
+            assert routing_decision.model_name is not None
+            force_run_context_values(config, {"model_name": routing_decision.model_name})
         force_run_context_values(config, context_overrides)
         if not is_internal_caller:
             # ``body.config`` is free-form and copied verbatim by

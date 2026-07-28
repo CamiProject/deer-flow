@@ -50,6 +50,13 @@ def test_development_compose_isolates_action_worker_credentials():
     assert worker_env["DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN"] != ""
 
 
+def test_development_compose_passes_model_routing_extra_to_gateway_build_and_runtime():
+    gateway = _compose("docker-compose-dev.yaml")["services"]["gateway"]
+
+    assert gateway["build"]["args"]["UV_EXTRAS"] == "${UV_EXTRAS:-}"
+    assert "UV_EXTRAS=${UV_EXTRAS:-}" in gateway["environment"]
+
+
 def test_semantic_api_healthchecks_use_runtime_python():
     for compose_name in ("docker-compose.yaml", "docker-compose-dev.yaml"):
         healthcheck = _compose(compose_name)["services"]["semantic-api"]["healthcheck"]["test"]

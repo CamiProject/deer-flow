@@ -17,7 +17,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 21
+config_version: 22
 
 # ============================================================================
 # Logging
@@ -67,6 +67,29 @@ token_budget:
 # deeply nested subagent graphs.
 max_recursion_limit: 1000
 
+
+# ============================================================================
+# Model Routing (optional, local rules + FAISS fallback)
+# ============================================================================
+# The two model names must also exist under `models` below. The router is
+# disabled by default; use shadow before enforce in a production deployment.
+model_routing:
+  mode: disabled  # disabled | shadow | enforce
+  # simple_model: configured-simple-model
+  # complex_model: configured-complex-model
+  rules_version: "1"
+  faiss:
+    index_path: .deer-flow/model-routing/routes.faiss
+    examples_path: .deer-flow/model-routing/route-examples.jsonl
+    metadata_path: .deer-flow/model-routing/routes.meta.json
+    embedding_provider: hashing
+    embedding_model: routing-hash-v1
+    embedding_dimension: 384
+    top_k: 5
+    similarity_threshold: 0.75
+    min_votes: 2
+    label_version: "1"
+    index_version: "1"
 
 # ============================================================================
 # Models Configuration
