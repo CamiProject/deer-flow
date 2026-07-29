@@ -15,9 +15,12 @@ class SemanticSettings:
     action_lease_seconds: int
     scope_resolver_url: str = ""
     scope_resolver_token: str = ""
+    evals_evidence_enabled: bool = False
 
 
 def get_semantic_settings() -> SemanticSettings:
+    from deerflow.config import get_app_config
+
     database_url = os.environ.get(
         "DEER_FLOW_SEMANTIC_DATABASE_URL",
         "sqlite+aiosqlite:///./.deer-flow/data/semantic.db",
@@ -31,6 +34,15 @@ def get_semantic_settings() -> SemanticSettings:
         raise RuntimeError("Invalid semantic platform worker configuration") from exc
     if not database_url or not service_token or not audience:
         raise RuntimeError("DEER_FLOW_SEMANTIC_DATABASE_URL, DEER_FLOW_SEMANTIC_SERVICE_TOKEN and semantic audience are required")
+    explicit_evals = os.environ.get("DEER_FLOW_EVALS_EVIDENCE_ENABLED")
+    if explicit_evals is not None:
+        evals_requested = explicit_evals.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        try:
+            evals_requested = get_app_config().evals.enabled
+        except Exception:
+            evals_requested = False
+    evals_enabled = os.environ.get("DEER_FLOW_ENV", "").strip() == "eval" and evals_requested
     return SemanticSettings(
         database_url=database_url,
         service_token=service_token,
@@ -45,4 +57,5 @@ def get_semantic_settings() -> SemanticSettings:
             "DEER_FLOW_SEMANTIC_SCOPE_RESOLVER_TOKEN",
             "",
         ).strip(),
+        evals_evidence_enabled=evals_enabled,
     )

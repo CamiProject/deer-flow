@@ -1,4 +1,5 @@
 from .app_config import get_app_config
+from .evals_config import EvalsConfig
 from .extensions_config import ExtensionsConfig, get_extensions_config
 from .loop_detection_config import LoopDetectionConfig
 from .memory_config import MemoryConfig, get_memory_config
@@ -20,6 +21,7 @@ __all__ = [
     "get_paths",
     "SkillsConfig",
     "ExtensionsConfig",
+    "EvalsConfig",
     "get_extensions_config",
     "LoopDetectionConfig",
     "MemoryConfig",

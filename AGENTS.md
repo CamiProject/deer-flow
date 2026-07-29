@@ -42,6 +42,10 @@ starts Action Worker only when `DEER_FLOW_ACTIONS_ENABLED=true`; production Comp
 starts both internal services. See
 [backend/AGENTS.md](backend/AGENTS.md) for the runtime and router detail.
 
+Offline Evals are opt-in and run as a one-shot CLI, not as another permanent
+service. `make eval-fixture` starts the eval-only fake IAM/Domain API on `8004`,
+and `make eval-smoke` runs the committed SaaS Smoke Suite through Gateway.
+
 ## Repository Map
 
 ```
@@ -88,6 +92,8 @@ make start       # Start all services in production mode (local, optimized)
 make stop        # Stop all running services
 make up / down   # Build/stop the production Docker stack (browser at localhost:2026)
 make docker-start / docker-stop / docker-logs   # Docker development environment
+make eval-fixture # Start isolated eval-only IAM/Domain fixture (port 8004)
+make eval-smoke   # Run the committed SaaS Evals smoke suite
 ```
 
 Run `make help` for the full list.

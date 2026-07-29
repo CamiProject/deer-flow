@@ -88,15 +88,40 @@ class SemanticAuditRepository:
             session.add(row)
             await session.commit()
 
-    async def list_for_trace(self, semantic_trace_id: str) -> list[dict[str, Any]]:
+    async def list_for_trace(
+        self,
+        semantic_trace_id: str,
+        *,
+        authorization: AuthorizationContext,
+    ) -> list[dict[str, Any]]:
         async with self._sf() as session:
-            rows = (await session.execute(select(SemanticAuditRow).where(SemanticAuditRow.semantic_trace_id == semantic_trace_id).order_by(SemanticAuditRow.created_at.asc()))).scalars()
+            rows = (
+                await session.execute(
+                    select(SemanticAuditRow)
+                    .where(
+                        SemanticAuditRow.semantic_trace_id == semantic_trace_id,
+                        SemanticAuditRow.principal_id == authorization.principal_id,
+                        SemanticAuditRow.tenant_id == authorization.tenant_id,
+                        SemanticAuditRow.system_code == authorization.system_code,
+                        SemanticAuditRow.scope_hash == authorization.scope_hash,
+                        SemanticAuditRow.permission_version == authorization.permission_version,
+                    )
+                    .order_by(SemanticAuditRow.created_at.asc())
+                )
+            ).scalars()
             return [
                 {
+                    "id": row.id,
+                    "semantic_trace_id": row.semantic_trace_id,
+                    "run_id": row.run_id,
+                    "thread_id": row.thread_id,
+                    "tool_call_id": row.tool_call_id,
                     "event_type": row.event_type,
                     "decision": row.decision,
                     "details": row.details,
                     "scope_hash": row.scope_hash,
+                    "permission_version": row.permission_version,
+                    "created_at": row.created_at.isoformat(),
                 }
                 for row in rows
             ]

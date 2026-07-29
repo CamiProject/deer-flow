@@ -1,6 +1,6 @@
 # DeerFlow - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor support-bundle detect-thread-boundaries detect-blocking-io dev dev-daemon start start-daemon nginx stop up down clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway docker-logs-redis
+.PHONY: help config config-upgrade check install setup doctor support-bundle detect-thread-boundaries detect-blocking-io eval-fixture eval-smoke dev dev-daemon start start-daemon nginx stop up down clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway docker-logs-redis
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -26,6 +26,8 @@ help:
 	@echo "  make check           - Check if all required tools are installed"
 	@echo "  make detect-thread-boundaries - Inventory async/thread boundary points"
 	@echo "  make detect-blocking-io        - Inventory blocking IO that may block the backend event loop"
+	@echo "  make eval-fixture     - Start the isolated Evals IAM/Domain fixture on port 8004"
+	@echo "  make eval-smoke       - Run the 12-case SaaS Evals smoke suite"
 	@echo "  make install         - Install all dependencies (frontend + backend + pre-commit hooks)"
 	@echo "  make setup-sandbox   - Pre-pull sandbox container image (recommended)"
 	@echo "  make dev             - Start all services in development mode (with hot-reloading)"
@@ -64,6 +66,12 @@ detect-thread-boundaries:
 
 detect-blocking-io:
 	@$(MAKE) -C backend detect-blocking-io
+
+eval-fixture:
+	@$(MAKE) -C backend eval-fixture
+
+eval-smoke:
+	@$(MAKE) -C backend eval-smoke
 
 config:
 	@$(PYTHON) ./scripts/configure.py

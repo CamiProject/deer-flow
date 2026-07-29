@@ -98,6 +98,8 @@ make test               # Run all backend tests
 make test-blocking-io   # Run strict Blockbuster runtime gate on tests/blocking_io/
 make lint               # Lint with ruff
 make format             # Format code with ruff
+make eval-fixture       # Start eval-only fake IAM/Domain API on port 8004
+make eval-smoke         # Run the committed SaaS Evals smoke suite
 make migrate-rev MSG="..."  # Autogenerate a new alembic revision (see Schema Migrations section)
 ```
 
@@ -362,6 +364,32 @@ The existing `/sql-cross-validate/*` routes remain A-protected compatibility/bre
 paths. SQL SubAgents set `skills=[]`; semantic-mode `mysql-query` receives only Semantic
 tools and `mysql-validator` receives only `explain_metric`. Deployment and JWT/IAM
 contracts are part of the SaaS semantic query and Action runtime boundary.
+
+### Offline Agent Evals (`app/evals/`)
+
+The Evals MVP is a one-shot CLI (`python -m app.evals.cli run`), not Gateway
+middleware or a permanent worker. It loads versioned YAML/JSONL suites, calls the
+real Gateway `saas-query` wait endpoint, collects Run/Event, Semantic Audit,
+Action, and Fixture evidence, applies deterministic P0/P1 graders, and emits a
+fail-closed report under `.deer-flow/evals/runs/`.
+
+Dependency direction remains `app.evals -> deerflow.*`; Harness must never import
+`app.evals`. Eval metadata is accepted only for internally authenticated calls
+while `DEER_FLOW_ENV=eval`. Formal runs also require `evals.enabled: true` and
+`run_events.backend: db`. The Runner holds Gateway/Semantic/Fixture test tokens but
+never Action Worker write credentials. Reports project Action evidence to IDs,
+states, versions, Scope hashes, timestamps, and error codes; do not add Action
+parameters, Domain results, raw errors, credentials, or full traces to reports.
+`EVALS_AUTHORIZATION_JWT_KEY` overrides the SaaS verification key only when
+`DEER_FLOW_ENV=eval`; non-eval environments never trust that test key.
+
+`make eval-fixture` starts a fake IAM/Domain API for deterministic Action tests;
+`make eval-smoke` runs the committed 12-case suite. Both commands load the
+repository-root `.env`. The Fixture does not replace
+the Semantic datasource, so Semantic read cases need a separate isolated
+eval-tenant datasource and configured test model. End-to-end operation covers
+Case preparation, datasource seeding, service startup, gate execution, and
+JSONL/JSON/Markdown report review.
 
 The built-in SQL tool contract is intentionally limited to `sql_show_databases`,
 `sql_list_tables`, `sql_schema`, `sql_query`, and `sql_query_checker`. Legacy keyword

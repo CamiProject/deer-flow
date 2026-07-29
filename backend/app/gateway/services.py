@@ -462,8 +462,22 @@ def _saas_scope_binding(authorization: Any) -> dict[str, str]:
     }
 
 
-def _strip_server_run_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    return {key: value for key, value in dict(metadata or {}).items() if key != _SAAS_SCOPE_BINDING_METADATA_KEY and not (isinstance(key, str) and key.startswith("__"))}
+_EVAL_RUN_METADATA_KEYS = frozenset(
+    {
+        "eval_run_id",
+        "eval_case_id",
+        "eval_trial_index",
+        "eval_dataset_hash",
+    }
+)
+
+
+def _strip_server_run_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    allow_eval_metadata: bool = False,
+) -> dict[str, Any]:
+    return {key: value for key, value in dict(metadata or {}).items() if key != _SAAS_SCOPE_BINDING_METADATA_KEY and not (isinstance(key, str) and key.startswith("__")) and (allow_eval_metadata or key not in _EVAL_RUN_METADATA_KEYS)}
 
 
 async def _bind_or_validate_saas_thread_scope(
@@ -845,7 +859,11 @@ async def start_run(
         if not allowed:
             raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
 
-    safe_body_metadata = _strip_server_run_metadata(body.metadata)
+    allow_eval_metadata = getattr(request_user, "system_role", None) == INTERNAL_SYSTEM_ROLE and os.environ.get("DEER_FLOW_ENV", "").strip() == "eval"
+    safe_body_metadata = _strip_server_run_metadata(
+        body.metadata,
+        allow_eval_metadata=allow_eval_metadata,
+    )
 
     existing_saas_thread = None
     scope_binding = None
@@ -955,7 +973,12 @@ async def start_run(
             graph_input = Command(resume=command["resume"])
         else:
             graph_input = normalize_input(body.input)
-        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=effective_assistant_id)
+        config = build_run_config(
+            thread_id,
+            body.config,
+            safe_body_metadata,
+            assistant_id=effective_assistant_id,
+        )
         await apply_checkpoint_to_run_config(config, body=body, thread_id=thread_id, request=request)
 
         # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.

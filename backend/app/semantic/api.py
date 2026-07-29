@@ -201,6 +201,26 @@ def create_app(*, settings=None, ontology=None, sql_policy=None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/v1/audit/traces/{trace_id}")
+    async def get_semantic_trace_evidence(
+        trace_id: str,
+        request: Request,
+        authorization: AuthorizationContext = Depends(require_semantic_authorization),
+        _request_context: SemanticRequestContext = Depends(require_semantic_request_context),
+    ) -> dict[str, Any]:
+        if not resolved_settings.evals_evidence_enabled:
+            raise HTTPException(status_code=404, detail="Not found")
+        events = await request.app.state.semantic_audit_repository.list_for_trace(
+            trace_id,
+            authorization=authorization,
+        )
+        if not events:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "AUDIT_NOT_FOUND", "message": "Semantic audit trace not found"},
+            )
+        return {"semantic_trace_id": trace_id, "events": events}
+
     @app.post("/v1/ontology/resolve")
     async def resolve_ontology(
         body: ResolveRequest,
@@ -587,6 +607,26 @@ def create_app(*, settings=None, ontology=None, sql_policy=None) -> FastAPI:
             return _traced(result, request_context)
         except Exception as exc:
             raise _handle_domain_error(exc) from exc
+
+    @app.get("/v1/actions/proposals/{proposal_id}/evidence")
+    async def get_action_evidence(
+        proposal_id: str,
+        request: Request,
+        authorization: AuthorizationContext = Depends(require_semantic_authorization),
+        _request_context: SemanticRequestContext = Depends(require_semantic_request_context),
+    ) -> dict[str, Any]:
+        if not resolved_settings.evals_evidence_enabled:
+            raise HTTPException(status_code=404, detail="Not found")
+        evidence = await _actions(request).get_proposal_evidence(
+            proposal_id,
+            authorization=authorization,
+        )
+        if evidence is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "ACTION_NOT_FOUND", "message": "Action proposal not found"},
+            )
+        return evidence
 
     @app.get("/v1/actions/executions/{execution_id}")
     async def get_action_status(

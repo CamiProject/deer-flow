@@ -10,6 +10,7 @@ from app.auth.saas_authorization import (
     SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR,
     SAAS_AUTHORIZATION_JWT_ISSUER_ENV_VAR,
     SaasAuthorizationError,
+    jwt_settings,
 )
 
 APPROVAL_AUDIENCE = "semantic-action-approval"
@@ -22,12 +23,14 @@ def verify_action_approval(
     principal_id: str,
     scope_hash: str,
 ) -> str:
-    key = os.environ.get("SAAS_ACTION_APPROVAL_JWT_KEY") or os.environ.get("SAAS_AUTHORIZATION_JWT_KEY")
-    algorithms = [value.strip() for value in os.environ.get(SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR, "RS256").split(",") if value.strip()]
-    issuer = os.environ.get("SAAS_ACTION_APPROVAL_JWT_ISSUER") or os.environ.get(
-        SAAS_AUTHORIZATION_JWT_ISSUER_ENV_VAR,
-        "saas-gateway",
-    )
+    explicit_key = os.environ.get("SAAS_ACTION_APPROVAL_JWT_KEY", "").strip()
+    if explicit_key:
+        key = explicit_key
+        algorithms = [value.strip() for value in os.environ.get(SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR, "RS256").split(",") if value.strip()]
+        default_issuer = os.environ.get(SAAS_AUTHORIZATION_JWT_ISSUER_ENV_VAR, "saas-gateway")
+    else:
+        key, algorithms, default_issuer, _audience = jwt_settings(audience=APPROVAL_AUDIENCE)
+    issuer = os.environ.get("SAAS_ACTION_APPROVAL_JWT_ISSUER") or default_issuer
     issuer = issuer.strip()
     if not key or not algorithms or not issuer:
         raise SaasAuthorizationError("Action approval verification is not configured")

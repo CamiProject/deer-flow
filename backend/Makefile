@@ -1,3 +1,5 @@
+EVALS_GATEWAY_URL ?= http://127.0.0.1:8001
+
 install:
 	uv sync
 
@@ -22,6 +24,12 @@ format:
 
 detect-blocking-io:
 	@PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python ../scripts/detect_blocking_io_static.py --output ../.deer-flow/blocking-io-findings.json
+
+eval-fixture:
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --env-file ../.env uvicorn app.evals.fixture_api:create_fixture_app --factory --host 127.0.0.1 --port 8004
+
+eval-smoke:
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --env-file ../.env python -m app.evals.cli run --suite ../evals/suites/saas-agent-smoke.yaml --gateway-url $(EVALS_GATEWAY_URL)
 
 # Generate a new alembic revision by autogenerating the diff against the live
 # ORM models. Usage: make migrate-rev MSG="add foo column to runs"

@@ -79,3 +79,19 @@ def test_local_launcher_starts_internal_semantic_api_and_optional_worker():
     assert worker_start < credential_scrub < semantic_start
     assert "unset DEER_FLOW_ACTION_WORKER_AUTHORIZATION_TOKEN" in script
     assert "unset SAAS_DOMAIN_API_TOKEN" in script
+
+
+def test_evals_compose_overlay_is_local_only_and_uses_dedicated_eval_credentials():
+    services = _compose("docker-compose-evals.yaml")["services"]
+
+    assert services["gateway"]["ports"] == ["127.0.0.1:8001:8001"]
+    assert services["semantic-api"]["ports"] == ["127.0.0.1:8003:8003"]
+    assert services["eval-fixture"]["ports"] == ["127.0.0.1:8004:8004"]
+    assert services["eval-fixture"]["restart"] == "no"
+    for service_name in ("gateway", "semantic-api", "action-worker"):
+        environment = _environment(services[service_name])
+        assert environment["DEER_FLOW_ENV"] == "eval"
+        assert environment["SAAS_AUTHORIZATION_JWT_KEY"] == "${EVALS_AUTHORIZATION_JWT_KEY}"
+    worker_environment = _environment(services["action-worker"])
+    assert "eval-fixture" in worker_environment["NO_PROXY"]
+    assert worker_environment["DEER_FLOW_ACTION_WORKER_DOMAIN_API_TOKEN"] == "${EVALS_SAAS_INTERNAL_TOKEN}"

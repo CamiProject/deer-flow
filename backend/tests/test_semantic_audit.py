@@ -61,11 +61,16 @@ async def test_semantic_audit_persists_correlation_but_drops_secrets_and_rows(tm
             ],
         },
     )
-    rows = await repository.list_for_trace("trace-1")
+    rows = await repository.list_for_trace("trace-1", authorization=_authorization())
     await engine.dispose()
 
     assert rows == [
         {
+            "id": rows[0]["id"],
+            "semantic_trace_id": "trace-1",
+            "run_id": "run-1",
+            "thread_id": "thread-1",
+            "tool_call_id": "tool-1",
             "event_type": "metric.query",
             "decision": "allow",
             "details": {
@@ -75,5 +80,36 @@ async def test_semantic_audit_persists_correlation_but_drops_secrets_and_rows(tm
                 "nested": [{"name": "safe", "child": {"status": "ok"}}],
             },
             "scope_hash": _authorization().scope_hash,
+            "permission_version": "1",
+            "created_at": rows[0]["created_at"],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_semantic_audit_trace_read_is_scoped_to_full_authorization(tmp_path):
+    engine = create_semantic_engine(f"sqlite+aiosqlite:///{tmp_path / 'semantic.db'}")
+    await initialize_semantic_database(engine)
+    repository = SemanticAuditRepository(create_semantic_session_factory(engine))
+    authorization = _authorization()
+    await repository.record(
+        request_context=SemanticRequestContext(
+            run_id="run-1",
+            thread_id="thread-1",
+            tool_call_id="tool-1",
+            semantic_trace_id="trace-1",
+        ),
+        authorization=authorization,
+        event_type="metric.query",
+        decision="allow",
+        details={"metric_ids": ["site.count"]},
+    )
+    changed_mapping = authorization.to_runtime_dict()
+    changed_mapping.pop("scope_hash")
+    changed_mapping["allowed_site_ids"] = ["site-2"]
+    changed_scope = AuthorizationContext.from_mapping(changed_mapping)
+
+    rows = await repository.list_for_trace("trace-1", authorization=changed_scope)
+    await engine.dispose()
+
+    assert rows == []

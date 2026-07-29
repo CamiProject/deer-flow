@@ -102,6 +102,19 @@ def _target_in_scope(action: ActionDefinition, target_id: str, authorization: Au
     return False
 
 
+def _proposal_matches_authorization(
+    proposal: ActionProposalRow,
+    authorization: AuthorizationContext,
+) -> bool:
+    return (
+        proposal.principal_id == authorization.principal_id
+        and proposal.tenant_id == authorization.tenant_id
+        and proposal.system_code == authorization.system_code
+        and proposal.scope_hash == authorization.scope_hash
+        and proposal.permission_version == authorization.permission_version
+    )
+
+
 def validate_action_target(
     *,
     action: ActionDefinition,
@@ -268,9 +281,54 @@ class ActionRepository:
     async def get_proposal(self, proposal_id: str, *, authorization: AuthorizationContext) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.get(ActionProposalRow, proposal_id)
-            if row is None or row.principal_id != authorization.principal_id or row.tenant_id != authorization.tenant_id:
+            if row is None or not _proposal_matches_authorization(row, authorization):
                 return None
             return _proposal_dict(row)
+
+    async def get_proposal_evidence(
+        self,
+        proposal_id: str,
+        *,
+        authorization: AuthorizationContext,
+    ) -> dict[str, Any] | None:
+        """Return read-only Action state and transitions for the owning Scope."""
+        async with self._sf() as session:
+            proposal = await session.get(ActionProposalRow, proposal_id)
+            if proposal is None or not _proposal_matches_authorization(proposal, authorization):
+                return None
+            execution = (await session.execute(select(ActionExecutionRow).where(ActionExecutionRow.proposal_id == proposal_id))).scalar_one_or_none()
+            proposal_transitions = list(
+                (
+                    await session.execute(
+                        select(ActionTransitionRow.to_status)
+                        .where(
+                            ActionTransitionRow.entity_type == "proposal",
+                            ActionTransitionRow.entity_id == proposal_id,
+                        )
+                        .order_by(ActionTransitionRow.id.asc())
+                    )
+                ).scalars()
+            )
+            execution_transitions: list[str] = []
+            if execution is not None:
+                execution_transitions = list(
+                    (
+                        await session.execute(
+                            select(ActionTransitionRow.to_status)
+                            .where(
+                                ActionTransitionRow.entity_type == "execution",
+                                ActionTransitionRow.entity_id == execution.id,
+                            )
+                            .order_by(ActionTransitionRow.id.asc())
+                        )
+                    ).scalars()
+                )
+            return {
+                "proposal": _proposal_dict(proposal),
+                "proposal_transitions": proposal_transitions,
+                "execution": _execution_with_proposal(execution, proposal) if execution is not None else None,
+                "execution_transitions": execution_transitions,
+            }
 
     async def approve(self, proposal_id: str, *, authorization: AuthorizationContext, approved_by: str) -> dict[str, Any]:
         async with self._sf() as session:
@@ -397,14 +455,7 @@ class ActionRepository:
             if execution is None:
                 return None
             proposal = await session.get(ActionProposalRow, execution.proposal_id)
-            if (
-                proposal is None
-                or proposal.principal_id != authorization.principal_id
-                or proposal.tenant_id != authorization.tenant_id
-                or proposal.system_code != authorization.system_code
-                or proposal.scope_hash != authorization.scope_hash
-                or proposal.permission_version != authorization.permission_version
-            ):
+            if proposal is None or not _proposal_matches_authorization(proposal, authorization):
                 return None
             return _execution_with_proposal(execution, proposal)
 

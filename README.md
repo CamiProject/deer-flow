@@ -365,6 +365,29 @@ break-glass path.
 The SaaS integration covers the JWT contract, IAM resolver APIs, Ontology policy,
 deployment variables, Action lifecycle, and security boundaries.
 
+#### Offline Agent Evals
+
+The opt-in Evals MVP executes versioned SaaS cases through the real Gateway Run
+lifecycle, collects Run/Semantic/Action/Fixture evidence, applies deterministic
+P0/P1 graders, and writes JSONL, JSON, and Markdown gate reports.
+
+Set `config.yaml` to `evals.enabled: true` and `run_events.backend: db`, set
+`DEER_FLOW_ENV=eval` plus the Evals secrets from `.env.example`, then run:
+
+```bash
+make eval-fixture   # isolated fake IAM and Domain API on 127.0.0.1:8004
+make eval-smoke     # 12-case suite; report under .deer-flow/evals/runs/
+```
+
+Both commands load the repository-root `.env`. A complete evaluation workflow
+requires versioned Cases, an isolated tenant MySQL datasource, a configured test
+model, evidence collection, gate review, and report inspection.
+
+Exit codes are `0` for pass, `1` for a failed gate, and `2` for incomplete or
+invalid evaluation configuration. The Fixture provides deterministic Action
+state, IAM revalidation, and Domain API writes; Semantic read cases still require
+an isolated eval-tenant datasource and a configured test model.
+
 #### Docker Production Deployment
 
 `deploy.sh` supports building and starting separately:

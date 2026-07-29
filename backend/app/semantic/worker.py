@@ -132,7 +132,12 @@ class SaasAuthorizationRevalidator:
             ) as client:
                 response = await client.post(
                     self._url,
-                    headers={"X-SaaS-Internal-Token": self._service_token},
+                    headers={
+                        "X-SaaS-Internal-Token": self._service_token,
+                        "X-DeerFlow-Run-Id": str(proposal["run_id"]),
+                        "X-DeerFlow-Thread-Id": str(proposal["thread_id"]),
+                        "X-DeerFlow-Semantic-Trace-Id": str(proposal["semantic_trace_id"]),
+                    },
                     json=body,
                 )
         except httpx.HTTPError as exc:

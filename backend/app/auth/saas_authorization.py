@@ -13,6 +13,8 @@ SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR = "SAAS_AUTHORIZATION_JWT_ALGORITHMS"
 SAAS_AUTHORIZATION_JWT_ISSUER_ENV_VAR = "SAAS_AUTHORIZATION_JWT_ISSUER"
 SAAS_AUTHORIZATION_JWT_AUDIENCE_ENV_VAR = "SAAS_AUTHORIZATION_JWT_AUDIENCE"
 SAAS_AUTHORIZATION_JWT_MAX_TTL_ENV_VAR = "SAAS_AUTHORIZATION_JWT_MAX_TTL_SECONDS"
+EVALS_AUTHORIZATION_JWT_KEY_ENV_VAR = "EVALS_AUTHORIZATION_JWT_KEY"
+EVALS_AUTHORIZATION_JWT_ALGORITHM_ENV_VAR = "EVALS_AUTHORIZATION_JWT_ALGORITHM"
 
 
 class SaasAuthorizationError(ValueError):
@@ -20,8 +22,14 @@ class SaasAuthorizationError(ValueError):
 
 
 def jwt_settings(*, audience: str | None = None) -> tuple[str, list[str], str, str]:
-    key = os.environ.get(SAAS_AUTHORIZATION_JWT_KEY_ENV_VAR, "").replace("\\n", "\n").strip()
-    algorithms = [value.strip() for value in os.environ.get(SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR, "RS256").split(",") if value.strip()]
+    eval_key = os.environ.get(EVALS_AUTHORIZATION_JWT_KEY_ENV_VAR, "") if os.environ.get("DEER_FLOW_ENV", "").strip() == "eval" else ""
+    if eval_key.strip():
+        key = eval_key.replace("\\n", "\n").strip()
+        algorithm_setting = os.environ.get(EVALS_AUTHORIZATION_JWT_ALGORITHM_ENV_VAR, "HS256")
+    else:
+        key = os.environ.get(SAAS_AUTHORIZATION_JWT_KEY_ENV_VAR, "").replace("\\n", "\n").strip()
+        algorithm_setting = os.environ.get(SAAS_AUTHORIZATION_JWT_ALGORITHMS_ENV_VAR, "RS256")
+    algorithms = [value.strip() for value in algorithm_setting.split(",") if value.strip()]
     issuer = os.environ.get(SAAS_AUTHORIZATION_JWT_ISSUER_ENV_VAR, "saas-gateway").strip()
     resolved_audience = audience or os.environ.get(SAAS_AUTHORIZATION_JWT_AUDIENCE_ENV_VAR, "deerflow").strip()
     if not key:

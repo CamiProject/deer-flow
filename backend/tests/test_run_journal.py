@@ -193,6 +193,64 @@ class TestLifecycleCallbacks:
 
 class TestToolCallbacks:
     @pytest.mark.anyio
+    async def test_tool_lifecycle_emits_structured_redacted_trace_events(self, journal_setup):
+        from langchain_core.messages import ToolMessage
+
+        j, store = journal_setup
+        callback_run_id = uuid4()
+        j.on_tool_start(
+            {"name": "semantic_query"},
+            '{"metric":"site.count","authorization":"secret"}',
+            run_id=callback_run_id,
+            tags=["lead_agent"],
+            inputs={"metric": "site.count", "authorization_token": "must-not-persist"},
+        )
+        j.on_tool_end(
+            ToolMessage(content="ok", tool_call_id="call-1", name="semantic_query"),
+            run_id=callback_run_id,
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        lifecycle = [event for event in events if event["event_type"] in {"tool.call", "tool.end"}]
+        assert [event["event_type"] for event in lifecycle] == ["tool.call", "tool.end"]
+        assert lifecycle[0]["content"]["tool_name"] == "semantic_query"
+        assert lifecycle[0]["content"]["caller"] == "lead_agent"
+        assert lifecycle[0]["content"]["arguments"] == {
+            "authorization_token": "[redacted]",
+            "metric": "site.count",
+        }
+        assert len(lifecycle[0]["content"]["arguments_hash"]) == 64
+        assert "must-not-persist" not in repr(lifecycle)
+        assert lifecycle[1]["content"]["tool_call_id"] == "call-1"
+        assert lifecycle[1]["content"]["status"] == "succeeded"
+
+    @pytest.mark.anyio
+    async def test_tool_error_emits_structured_error_without_error_detail(self, journal_setup):
+        j, store = journal_setup
+        callback_run_id = uuid4()
+        j.on_tool_start(
+            {"name": "semantic_query"},
+            "{}",
+            run_id=callback_run_id,
+            tags=["subagent:mysql-query"],
+            inputs={},
+        )
+        j.on_tool_error(
+            RuntimeError("database password=must-not-persist"),
+            run_id=callback_run_id,
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        error = next(event for event in events if event["event_type"] == "tool.error")
+        assert error["content"]["tool_name"] == "semantic_query"
+        assert error["content"]["caller"] == "subagent:mysql-query"
+        assert error["content"]["status"] == "failed"
+        assert error["content"]["error_type"] == "RuntimeError"
+        assert "must-not-persist" not in repr(error)
+
+    @pytest.mark.anyio
     async def test_tool_end_with_tool_message(self, journal_setup):
         """on_tool_end with a ToolMessage stores it as llm.tool.result."""
         from langchain_core.messages import ToolMessage

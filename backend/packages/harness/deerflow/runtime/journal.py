@@ -18,6 +18,8 @@ Key design decisions:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -40,6 +42,41 @@ logger = logging.getLogger(__name__)
 _LEGACY_SUMMARY_MESSAGE_NAME = "summary"
 _RECONCILED_TOOL_MESSAGE_NAMES = frozenset({"ask_clarification"})
 _PERSISTED_HIDDEN_HUMAN_INPUT_RESPONSE_SOURCES = frozenset({"ask_clarification"})
+_SENSITIVE_TOOL_ARGUMENT_FRAGMENTS = (
+    "authorization",
+    "connection",
+    "cookie",
+    "jdbc",
+    "password",
+    "secret",
+    "token",
+)
+_MAX_TOOL_ARGUMENT_DEPTH = 4
+
+
+def _safe_tool_arguments(value: Any, *, depth: int = 0) -> Any:
+    """Keep useful tool argument shape while dropping credentials and bulk data."""
+    if depth >= _MAX_TOOL_ARGUMENT_DEPTH:
+        return "[truncated]"
+    if isinstance(value, Mapping):
+        safe: dict[str, Any] = {}
+        for raw_key, raw_value in list(value.items())[:100]:
+            key = str(raw_key)[:128]
+            if any(fragment in key.lower() for fragment in _SENSITIVE_TOOL_ARGUMENT_FRAGMENTS):
+                safe[key] = "[redacted]"
+            else:
+                safe[key] = _safe_tool_arguments(raw_value, depth=depth + 1)
+        return safe
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_safe_tool_arguments(item, depth=depth + 1) for item in list(value)[:100]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:1000]
+
+
+def _argument_hash(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _should_persist_human_input_message(message: BaseMessage) -> bool:
@@ -118,6 +155,7 @@ class RunJournal(BaseCallbackHandler):
         self._seen_llm_starts: set[str] = set()  # langchain run_ids that fired on_chat_model_start
         self._current_run_tool_call_names: dict[str, str] = {}
         self._persisted_tool_message_identities: set[str] = set()
+        self._active_tool_calls: dict[str, dict[str, Any]] = {}
 
     # -- Lifecycle callbacks --
 
@@ -343,12 +381,43 @@ class RunJournal(BaseCallbackHandler):
         self._put(event_type="llm.error", category="trace", content=str(error))
 
     def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kwargs):
-        """Handle tool start event, cache tool call ID for later correlation"""
-        tool_call_id = str(run_id)
+        """Persist a redacted, structured tool invocation for trajectory grading."""
+        callback_id = str(run_id)
+        serialized = serialized if isinstance(serialized, Mapping) else {}
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        tool_name = str(serialized.get("name") or metadata.get("name") or kwargs.get("name") or "unknown")[:256]
+        tool_call_id = str(metadata.get("tool_call_id") or callback_id)[:128]
+        caller = self._identify_caller(tags)
+        arguments = _safe_tool_arguments(inputs if inputs is not None else {})
+        content = {
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "caller": caller,
+            "status": "started",
+            "arguments": arguments,
+            "arguments_hash": _argument_hash(arguments),
+        }
+        self._active_tool_calls[callback_id] = content
+        self._put(event_type="tool.call", category="trace", content=content)
         logger.debug("Tool start for node %s, tool_call_id=%s, tags=%s", run_id, tool_call_id, tags)
 
     def on_tool_end(self, output, *, run_id, parent_run_id=None, **kwargs):
         """Handle tool end event, append message and clear node data"""
+        callback_id = str(run_id)
+        started = self._active_tool_calls.pop(callback_id, {})
+        actual_tool_call_id = getattr(output, "tool_call_id", None)
+        actual_tool_name = getattr(output, "name", None)
+        self._put(
+            event_type="tool.end",
+            category="trace",
+            content={
+                "tool_name": str(actual_tool_name or started.get("tool_name") or "unknown")[:256],
+                "tool_call_id": str(actual_tool_call_id or started.get("tool_call_id") or callback_id)[:128],
+                "caller": str(started.get("caller") or "lead_agent")[:256],
+                "status": "succeeded",
+                "arguments_hash": started.get("arguments_hash"),
+            },
+        )
         try:
             if isinstance(output, ToolMessage):
                 msg = cast(ToolMessage, output)
@@ -365,6 +434,23 @@ class RunJournal(BaseCallbackHandler):
                 logger.warning(f"on_tool_end {run_id}: output is not ToolMessage: {type(output)}")
         finally:
             logger.debug("Tool end for node %s", run_id)
+
+    def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        """Persist a typed failure without storing provider or credential details."""
+        callback_id = str(run_id)
+        started = self._active_tool_calls.pop(callback_id, {})
+        self._put(
+            event_type="tool.error",
+            category="error",
+            content={
+                "tool_name": str(started.get("tool_name") or kwargs.get("name") or "unknown")[:256],
+                "tool_call_id": str(started.get("tool_call_id") or callback_id)[:128],
+                "caller": str(started.get("caller") or "lead_agent")[:256],
+                "status": "failed",
+                "error_type": type(error).__name__[:128],
+                "arguments_hash": started.get("arguments_hash"),
+            },
+        )
 
     # -- Internal methods --
 

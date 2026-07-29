@@ -16,6 +16,7 @@ from deerflow.config.auth_config import AuthAppConfig
 from deerflow.config.channel_connections_config import ChannelConnectionsConfig
 from deerflow.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
+from deerflow.config.evals_config import EvalsConfig
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.guardrails_config import GuardrailsConfig, load_guardrails_config_from_dict
 from deerflow.config.input_polish_config import InputPolishConfig
@@ -149,6 +150,7 @@ class AppConfig(BaseModel):
     )
     models: list[ModelConfig] = Field(default_factory=list, description="Available models")
     model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig, description="Two-stage simple/complex model routing configuration")
+    evals: EvalsConfig = Field(default_factory=EvalsConfig, description="One-shot offline evaluation runner configuration")
     sandbox: SandboxConfig = Field(
         description=format_field_description(
             "sandbox",

@@ -16,10 +16,12 @@ import threading
 import time
 import uuid
 from contextlib import suppress
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import jwt
 import pytest
 from _agent_e2e_helpers import FakeToolCallingModel, build_single_tool_call_model
 from langchain_core.messages import AIMessage, HumanMessage
@@ -49,6 +51,9 @@ database:
 run_events:
   backend: memory
 """
+
+_EVAL_INTERNAL_TOKEN = "eval-gateway-internal-token"
+_EVAL_JWT_KEY = "eval-authorization-secret-at-least-32-bytes"
 
 
 class _RunController:
@@ -274,6 +279,37 @@ def isolated_app(isolated_deer_flow_home: Path, monkeypatch: pytest.MonkeyPatch)
     return create_app()
 
 
+@pytest.fixture
+def isolated_eval_app(isolated_deer_flow_home: Path, monkeypatch: pytest.MonkeyPatch):
+    config_path = isolated_deer_flow_home.parent / "config-evals-enabled.yaml"
+    config_path.write_text(
+        _MINIMAL_CONFIG_YAML.replace("run_events:\n  backend: memory", "run_events:\n  backend: db") + "evals:\n  enabled: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DEER_FLOW_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("DEER_FLOW_ENV", "eval")
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", _EVAL_JWT_KEY)
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ISSUER", "saas-gateway")
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_AUDIENCE", "deerflow")
+    monkeypatch.setenv("DEER_FLOW_SEMANTIC_API_URL", "http://semantic-api:8003")
+    monkeypatch.setenv("DEER_FLOW_SEMANTIC_SERVICE_TOKEN", "eval-semantic-service-token")
+
+    _preserve_process_config_singletons(monkeypatch)
+    _reset_process_singletons(monkeypatch)
+
+    from app.gateway import internal_auth
+    from deerflow.config import app_config as app_config_module
+
+    monkeypatch.setattr(internal_auth, "_INTERNAL_AUTH_TOKEN", _EVAL_INTERNAL_TOKEN)
+    cfg = app_config_module.get_app_config()
+    cfg.database.sqlite_dir = str(isolated_deer_flow_home / "db")
+
+    from app.gateway.app import create_app
+
+    return create_app()
+
+
 def test_lifespan_uses_sqlite_store_from_database_config(isolated_app):
     """Gateway startup must bind LangGraph Store to the unified database backend."""
     from langgraph.store.sqlite.aio import AsyncSqliteStore
@@ -488,6 +524,133 @@ def _stream_item_for_mode(stream_mode: Any, state: dict[str, Any]) -> Any:
         # ``run_agent`` passes a list when multiple modes/subgraphs are active.
         return stream_mode[0], state
     return state
+
+
+def _eval_authorization_token(*, principal_id: str) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": "saas-gateway",
+            "aud": ["deerflow", "semantic-platform"],
+            "sub": principal_id,
+            "tenant_id": "eval-tenant-1",
+            "tenant_code": "eval_tenant_1",
+            "tenant_name": "Gateway lifecycle eval tenant",
+            "system_code": "efficiency",
+            "role_codes": ["site_admin"],
+            "scope": {
+                "mode": "resource_set",
+                "site_ids": ["site-1"],
+                "project_ids": [],
+            },
+            "permission_version": "1",
+            "iat": now,
+            "exp": now + 300,
+            "jti": str(uuid.uuid4()),
+        },
+        _EVAL_JWT_KEY,
+        algorithm="HS256",
+    )
+
+
+def test_saas_eval_wait_run_uses_real_gateway_lifecycle_and_persists_eval_evidence(
+    isolated_eval_app,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Evals must cross auth, scope binding, worker, checkpointer and DB stores."""
+    from starlette.testclient import TestClient
+
+    principal_id = "eval-user-1"
+    thread_id = str(uuid.uuid4())
+    eval_metadata = {
+        "eval_run_id": "eval-lifecycle-1",
+        "eval_case_id": "gateway-lifecycle",
+        "eval_trial_index": 0,
+        "eval_dataset_hash": "a" * 64,
+    }
+    headers = {
+        "X-DeerFlow-Internal-Token": _EVAL_INTERNAL_TOKEN,
+        "X-DeerFlow-Owner-User-Id": principal_id,
+        "X-SaaS-Authorization-Context": _eval_authorization_token(principal_id=principal_id),
+    }
+    from deerflow.agents.saas_query import agent as saas_query_agent
+    from deerflow.semantic.client import SemanticPlatformClient
+
+    class EvalSubagentStatus(Enum):
+        COMPLETED = "completed"
+
+    class EvalSubagentResult:
+        status = EvalSubagentStatus.COMPLETED
+        result = "The scoped semantic result is 1 visible site."
+        error = None
+        token_usage_records: list[dict[str, Any]] = []
+
+    class EvalSubagentExecutor:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        async def _aexecute(self, prompt):
+            del prompt
+            return EvalSubagentResult()
+
+    async def resolve_business_context(self, **kwargs):
+        del self, kwargs
+        return {
+            "ontology_version": "1",
+            "objects": [{"id": "Site"}],
+            "metrics": [{"id": "site.count"}],
+            "actions": [],
+            "authorization_scope_hash": "scope-from-semantic",
+        }
+
+    def create_summary_model(*args, **kwargs):
+        del args, kwargs
+        return FakeToolCallingModel(responses=[AIMessage(content="There is 1 visible site.")])
+
+    monkeypatch.setattr(SemanticPlatformClient, "resolve_business_context", resolve_business_context)
+    monkeypatch.setattr(saas_query_agent, "SubagentExecutor", EvalSubagentExecutor)
+    monkeypatch.setattr(saas_query_agent, "SubagentStatus", EvalSubagentStatus)
+    monkeypatch.setattr(saas_query_agent, "create_chat_model", create_summary_model)
+
+    with TestClient(isolated_eval_app) as client:
+        response = client.post(
+            "/api/runs/saas-query/wait",
+            headers=headers,
+            json={
+                "input": {"messages": [{"role": "user", "content": "Count visible sites"}]},
+                "metadata": eval_metadata,
+                "config": {"configurable": {"thread_id": thread_id}},
+                "on_disconnect": "continue",
+                "on_completion": "keep",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["messages"][-1]["content"] == "There is 1 visible site."
+
+        runs_response = client.get(f"/api/threads/{thread_id}/runs", headers=headers)
+        assert runs_response.status_code == 200, runs_response.text
+        runs = runs_response.json()
+        assert len(runs) == 1
+        run = runs[0]
+        assert run["assistant_id"] == "saas-query"
+        assert run["status"] == "success"
+        assert all(run["metadata"][key] == value for key, value in eval_metadata.items())
+        assert run["metadata"]["permission_version"] == "1"
+        assert run["metadata"]["scope_hash"]
+        assert "authorization" not in json.dumps(run["kwargs"]).lower()
+
+        events_response = client.get(
+            f"/api/threads/{thread_id}/runs/{run['run_id']}/events",
+            headers=headers,
+        )
+        assert events_response.status_code == 200, events_response.text
+        event_types = {event["event_type"] for event in events_response.json()}
+        assert {"run.start", "llm.human.input", "llm.ai.response"}.issubset(event_types)
+
+        thread_response = client.get(f"/api/threads/{thread_id}", headers=headers)
+        assert thread_response.status_code == 200, thread_response.text
+        assert thread_response.json()["status"] == "idle"
 
 
 def test_stream_run_completes_and_persists_runtime_state(isolated_app):

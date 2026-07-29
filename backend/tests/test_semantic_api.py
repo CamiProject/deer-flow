@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -84,6 +85,7 @@ def _settings(tmp_path):
         authorization_audience="semantic-platform",
         action_worker_poll_seconds=0.1,
         action_lease_seconds=30,
+        evals_evidence_enabled=True,
     )
 
 
@@ -94,6 +96,7 @@ def _settings_with_scope_resolver(tmp_path):
         authorization_audience="semantic-platform",
         action_worker_poll_seconds=0.1,
         action_lease_seconds=30,
+        evals_evidence_enabled=True,
         scope_resolver_url="http://iam.internal/v1/scopes/resolve",
         scope_resolver_token="scope-service-secret",
     )
@@ -334,3 +337,91 @@ def test_semantic_api_rejects_scope_ref_resolution_to_tenant_all(monkeypatch, tm
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "SCOPE_CHANGED"
     runtime.query_metrics.assert_not_called()
+
+
+def test_semantic_audit_evidence_endpoint_returns_only_matching_scope(monkeypatch, tmp_path):
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", SECRET)
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
+    app = create_app(settings=_settings(tmp_path), ontology=_ontology(), sql_policy=_policy())
+    runtime = MagicMock()
+    runtime.query_metrics.return_value.to_dict.return_value = {
+        "rows": [{"site.count": 1}],
+        "ontology_version": "1",
+        "policy_version": "1",
+        "scope_hash": "ignored",
+    }
+    with TestClient(app) as client:
+        app.state.semantic_runtime = runtime
+        query = client.post(
+            "/v1/queries",
+            headers=_headers(),
+            json={"metrics": ["site.count"]},
+        )
+        assert query.status_code == 200
+
+        own = client.get("/v1/audit/traces/semantic-trace-1", headers=_headers())
+        changed_scope_token = _token(
+            scope={"mode": "resource_set", "site_ids": ["site-2"], "project_ids": []},
+            jti="changed-scope",
+        )
+        other_scope = client.get(
+            "/v1/audit/traces/semantic-trace-1",
+            headers=_headers(changed_scope_token),
+        )
+
+    assert own.status_code == 200
+    assert own.json()["semantic_trace_id"] == "semantic-trace-1"
+    assert own.json()["events"][0]["event_type"] == "metric.query"
+    assert own.json()["events"][0]["run_id"] == "run-1"
+    assert other_scope.status_code == 404
+
+
+def test_action_evidence_endpoint_includes_owned_transitions(monkeypatch, tmp_path):
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", SECRET)
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
+    app = create_app(settings=_settings(tmp_path), ontology=_ontology(), sql_policy=_policy())
+    runtime = MagicMock()
+    runtime.get_object.return_value = SimpleNamespace(rows=[{"id": "site-1", "name": "Old"}])
+    with TestClient(app) as client:
+        app.state.semantic_runtime = runtime
+        proposal = client.post(
+            "/v1/actions/proposals",
+            headers={**_headers(), "Idempotency-Key": "evidence-proposal"},
+            json={"action_id": "site.rename", "target_id": "site-1", "parameters": {"name": "New"}},
+        )
+        assert proposal.status_code == 200
+        proposal_id = proposal.json()["proposal_id"]
+
+        evidence = client.get(
+            f"/v1/actions/proposals/{proposal_id}/evidence",
+            headers=_headers(),
+        )
+        changed_scope_token = _token(
+            scope={"mode": "resource_set", "site_ids": ["site-2"], "project_ids": []},
+            jti="changed-action-scope",
+        )
+        hidden = client.get(
+            f"/v1/actions/proposals/{proposal_id}/evidence",
+            headers=_headers(changed_scope_token),
+        )
+
+    assert evidence.status_code == 200
+    assert evidence.json()["proposal"]["proposal_id"] == proposal_id
+    assert evidence.json()["proposal_transitions"] == ["PROPOSED"]
+    assert evidence.json()["execution"] is None
+    assert hidden.status_code == 404
+
+
+def test_evals_evidence_endpoints_are_hidden_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", SECRET)
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
+    app = create_app(
+        settings=replace(_settings(tmp_path), evals_evidence_enabled=False),
+        ontology=_ontology(),
+        sql_policy=_policy(),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/audit/traces/trace-1", headers=_headers())
+
+    assert response.status_code == 404
