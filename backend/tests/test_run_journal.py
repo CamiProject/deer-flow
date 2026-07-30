@@ -226,6 +226,92 @@ class TestToolCallbacks:
         assert lifecycle[1]["content"]["status"] == "succeeded"
 
     @pytest.mark.anyio
+    async def test_tool_end_exposes_only_semantic_correlation_fields(self, journal_setup):
+        from langchain_core.messages import ToolMessage
+
+        j, store = journal_setup
+        callback_run_id = uuid4()
+        j.on_tool_start(
+            {"name": "propose_action"},
+            "{}",
+            run_id=callback_run_id,
+            tags=["subagent:mysql-query"],
+            inputs={},
+        )
+        j.on_tool_end(
+            ToolMessage(
+                content='{"proposal_id":"proposal-1","semantic_trace_id":"trace-1","secret":"no"}',
+                tool_call_id="call-1",
+                name="propose_action",
+            ),
+            run_id=callback_run_id,
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        ended = next(event for event in events if event["event_type"] == "tool.end")
+        assert ended["content"]["proposal_id"] == "proposal-1"
+        assert ended["content"]["semantic_trace_id"] == "trace-1"
+        assert "secret" not in ended["content"]
+
+    @pytest.mark.anyio
+    async def test_external_subagent_messages_become_tool_trajectory(self, journal_setup):
+        j, store = journal_setup
+        messages = [
+            {
+                "type": "ai",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "name": "query_metrics",
+                        "args": {"metrics": ["site.count"]},
+                    }
+                ],
+            },
+            {
+                "type": "tool",
+                "tool_call_id": "call-1",
+                "name": "query_metrics",
+                "content": '{"rows":[{"site.count":2}],"semantic_trace_id":"trace-1"}',
+            },
+        ]
+
+        j.record_external_tool_messages(messages, caller="subagent:mysql-query")
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        trajectory = [event for event in events if event["event_type"].startswith("tool.")]
+        assert [event["event_type"] for event in trajectory] == ["tool.call", "tool.end"]
+        assert all(event["content"]["caller"] == "subagent:mysql-query" for event in trajectory)
+        assert "arguments" not in trajectory[0]["content"]
+        assert len(trajectory[0]["content"]["arguments_hash"]) == 64
+        assert trajectory[1]["content"]["semantic_trace_id"] == "trace-1"
+        assert "rows" not in trajectory[1]["content"]
+
+    @pytest.mark.anyio
+    async def test_external_subagent_semantic_error_keeps_only_stable_code(self, journal_setup):
+        j, store = journal_setup
+        j.record_external_tool_messages(
+            [
+                {
+                    "type": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "propose_action",
+                    "status": "error",
+                    "content": ("Error: Tool 'propose_action' failed with SemanticClientError: AUTHORIZATION_DENIED: private detail must-not-persist"),
+                }
+            ],
+            caller="subagent:mysql-query",
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        error = next(event for event in events if event["event_type"] == "tool.error")
+        assert error["content"]["status"] == "failed"
+        assert error["content"]["code"] == "AUTHORIZATION_DENIED"
+        assert "must-not-persist" not in repr(error)
+
+    @pytest.mark.anyio
     async def test_tool_error_emits_structured_error_without_error_detail(self, journal_setup):
         j, store = journal_setup
         callback_run_id = uuid4()

@@ -189,6 +189,27 @@ class _SubagentEventBuffer:
         if record is None:
             return
         self._pending.append({"thread_id": self._thread_id, "run_id": self._run_id, **record})
+        if record["event_type"] == "subagent.step" and isinstance(chunk, dict):
+            from deerflow.runtime.journal import tool_evidence_events_from_message
+
+            task_id = str(chunk.get("task_id") or "unknown")
+            message = chunk.get("message")
+            if isinstance(message, dict):
+                for evidence in tool_evidence_events_from_message(
+                    message,
+                    caller=f"subagent:{task_id}",
+                ):
+                    evidence["metadata"] = {
+                        "task_id": task_id,
+                        "message_index": chunk.get("message_index"),
+                    }
+                    self._pending.append(
+                        {
+                            "thread_id": self._thread_id,
+                            "run_id": self._run_id,
+                            **evidence,
+                        }
+                    )
         if record["event_type"] == "subagent.end" or len(self._pending) >= self.FLUSH_THRESHOLD:
             await self.flush()
 

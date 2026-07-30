@@ -239,6 +239,12 @@ async def _run_semantic_subagent(
         runtime_context=runtime_context,
     )
     result = await executor._aexecute(prompt)
+    journal = runtime_context.get("__run_journal")
+    if journal is not None and hasattr(journal, "record_external_tool_messages"):
+        journal.record_external_tool_messages(
+            getattr(result, "ai_messages", None) or [],
+            caller=f"subagent:{config.name}",
+        )
     return _SemanticAgentRun(role=role, subagent_type=subagent_type, result=result)
 
 

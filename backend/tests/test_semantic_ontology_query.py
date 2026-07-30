@@ -67,6 +67,7 @@ def registry():
             "actions": {
                 "site.rename": {
                     "version": "2",
+                    "keywords": ["rename site", "change site"],
                     "target_type": "Site",
                     "scope_dimension": "site",
                     "parameters": {"name": {"type": "string", "required": True, "min_length": 1}},
@@ -120,6 +121,20 @@ def test_registry_resolves_business_context_and_validates_actions(registry):
     assert registry.metric("project.count").grain == "project"
     with pytest.raises(OntologyError):
         registry.action("site.rename").validate_parameters({"name": ""})
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Change site-1 display name to New Display Name.",
+        "Rename site-1 to New Display Name.",
+    ],
+)
+def test_registry_resolves_action_keywords(registry, authorization, question):
+    context = registry.resolve(question, authorization=authorization)
+
+    assert [item["id"] for item in context["actions"]] == ["site.rename"]
+    assert registry.action("site.rename").keywords == ("rename site", "change site")
 
 
 def test_registry_filters_role_restricted_metrics_and_actions(registry):

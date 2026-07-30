@@ -83,9 +83,10 @@ async def test_steps_are_buffered_not_put_per_event():
 
     assert len(store.batches) == 1
     batch = store.batches[0]
-    assert [e["metadata"]["message_index"] for e in batch] == [1, 2]
+    steps = [event for event in batch if event["event_type"] == "subagent.step"]
+    assert [e["metadata"]["message_index"] for e in steps] == [1, 2]
     assert all(e["thread_id"] == "thread_1" and e["run_id"] == "run_1" for e in batch)
-    assert all(e["event_type"] == "subagent.step" and e["category"] == "subagent" for e in batch)
+    assert all(e["category"] == "subagent" for e in steps)
 
 
 @pytest.mark.asyncio
@@ -111,7 +112,7 @@ async def test_terminal_event_flushes_eagerly():
 
     assert len(store.batches) == 1
     batch = store.batches[0]
-    assert [e["event_type"] for e in batch] == ["subagent.step", "subagent.end"]
+    assert [e["event_type"] for e in batch] == ["subagent.step", "tool.end", "subagent.end"]
 
 
 @pytest.mark.asyncio
@@ -124,7 +125,7 @@ async def test_size_threshold_triggers_flush():
 
     # Reaching the threshold flushes without waiting for the run to end.
     assert len(store.batches) == 1
-    assert len(store.batches[0]) == _SubagentEventBuffer.FLUSH_THRESHOLD
+    assert len(store.batches[0]) >= _SubagentEventBuffer.FLUSH_THRESHOLD
 
 
 @pytest.mark.asyncio
@@ -173,3 +174,76 @@ async def test_roundtrip_step_is_listable_but_not_in_message_feed():
 
     messages = await store.list_messages("thread_1")
     assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_tool_steps_also_persist_bounded_trajectory_evidence():
+    from deerflow.runtime.events.store.memory import MemoryRunEventStore
+
+    store = MemoryRunEventStore()
+    buffer = _SubagentEventBuffer(store, "thread_1", "run_1")
+    await buffer.add(
+        {
+            "type": "task_running",
+            "task_id": "call_1",
+            "message_index": 1,
+            "message": {
+                "type": "ai",
+                "tool_calls": [
+                    {
+                        "id": "tool-call-1",
+                        "name": "propose_action",
+                        "args": {"action_id": "site.update_display_name"},
+                    }
+                ],
+            },
+        }
+    )
+    await buffer.add(
+        {
+            "type": "task_running",
+            "task_id": "call_1",
+            "message_index": 2,
+            "message": {
+                "type": "tool",
+                "tool_call_id": "tool-call-1",
+                "name": "propose_action",
+                "content": '{"proposal_id":"proposal-1","semantic_trace_id":"trace-1","parameters":{"name":"secret-name"}}',
+            },
+        }
+    )
+    await buffer.flush()
+
+    events = await store.list_events("thread_1", "run_1")
+    trajectory = [event for event in events if event["event_type"].startswith("tool.")]
+    assert [event["event_type"] for event in trajectory] == ["tool.call", "tool.end"]
+    assert trajectory[1]["content"]["proposal_id"] == "proposal-1"
+    assert trajectory[1]["content"]["semantic_trace_id"] == "trace-1"
+    assert "secret-name" not in repr(trajectory)
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_step_persists_semantic_rejection_code():
+    from deerflow.runtime.events.store.memory import MemoryRunEventStore
+
+    store = MemoryRunEventStore()
+    buffer = _SubagentEventBuffer(store, "thread_1", "run_1")
+    await buffer.add(
+        {
+            "type": "task_running",
+            "task_id": "call_1",
+            "message_index": 1,
+            "message": {
+                "type": "tool",
+                "tool_call_id": "tool-call-1",
+                "name": "propose_action",
+                "status": "error",
+                "content": ("Error: Tool 'propose_action' failed with SemanticClientError: AUTHORIZATION_DENIED: private detail"),
+            },
+        }
+    )
+    await buffer.flush()
+
+    events = await store.list_events("thread_1", "run_1")
+    error = next(event for event in events if event["event_type"] == "tool.error")
+    assert error["content"]["code"] == "AUTHORIZATION_DENIED"

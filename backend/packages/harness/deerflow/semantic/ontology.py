@@ -149,6 +149,7 @@ class ActionDefinition:
     name: str
     version: str
     label: str
+    keywords: tuple[str, ...]
     target_type: str
     scope_dimension: str
     parameters: Mapping[str, ParameterDefinition]
@@ -363,6 +364,7 @@ class OntologyRegistry:
                 name=name,
                 version=str(raw.get("version") or version),
                 label=str(raw.get("label") or name),
+                keywords=_keywords(raw.get("keywords")),
                 target_type=target_type,
                 scope_dimension=str(raw.get("scope_dimension") or "").strip().lower(),
                 parameters=parameters,
@@ -584,7 +586,7 @@ class OntologyRegistry:
                     "approval_required": action.approval_required,
                 }
                 for action in self.actions.values()
-                if matches(action.name, action.label, ())
+                if matches(action.name, action.label, action.keywords)
                 and (
                     authorization is None
                     or (

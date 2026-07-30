@@ -269,7 +269,12 @@ class ObservationCollector:
             transitions.extend({"entity_type": "proposal", "entity_id": proposal_id, "to_status": status} for status in payload.get("proposal_transitions", []))
             if isinstance(execution, dict):
                 transitions.extend({"entity_type": "execution", "entity_id": execution.get("execution_id"), "to_status": status} for status in payload.get("execution_transitions", []))
-        if case.expect.action is not None and not proposals and not (case.expect.action.outcome == "rejected" and rejection_codes):
+        called_tools = {event.tool_name for event in trajectory if event.event_type == "tool.call" and event.tool_name}
+        expected_action = case.expect.action
+        audited_preflight_rejection = bool(
+            expected_action and expected_action.outcome == "rejected" and expected_action.allow_preflight_rejection and semantic_events and ({"get_object", "search_objects", "list_available_actions"}.intersection(called_tools))
+        )
+        if expected_action is not None and not proposals and not ((expected_action.outcome == "rejected" and rejection_codes) or audited_preflight_rejection):
             missing.append("action_evidence")
 
         try:

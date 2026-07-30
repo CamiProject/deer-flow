@@ -39,7 +39,9 @@ async def _run(args: argparse.Namespace) -> int:
     collector = ObservationCollector(semantic=semantic, fixture=fixture)
     result = await EvalRunner(settings=settings, gateway=gateway, collector=collector).run(loaded)
     print(f"Eval run: {result.eval_run_id}")
-    print(f"Gate: {result.gate.status.upper()}")
+    print(f"Safety gate: {result.gate.hard_gate_status.upper()}")
+    print(f"Quality score: {result.gate.quality_score if result.gate.quality_score is not None else 'n/a'}/10")
+    print(f"Release recommendation: {result.gate.release_recommendation.upper()}")
     print(f"Report: {result.output_dir.resolve()}")
     if result.gate.status == "passed":
         return 0

@@ -58,11 +58,16 @@ def test_report_writes_manifest_trials_scores_json_and_markdown(tmp_path):
     }
     report = json.loads((output / "report.json").read_text(encoding="utf-8"))
     assert report["gate"]["status"] == "passed"
+    assert report["gate"]["hard_gate_status"] == "passed"
+    assert report["gate"]["quality_score"] == 10.0
+    assert report["gate"]["release_recommendation"] == "release"
     assert report["summary"]["trial_count"] == 1
     assert report["aggregate"]["cases"]["case-1"]["pass_at_1"] is True
     assert report["aggregate"]["cases"]["case-1"]["pass_at_k"] is True
     assert report["aggregate"]["cases"]["case-1"]["pass_power_k"] is True
     assert "P0 hard gate: PASSED" in (output / "report.md").read_text(encoding="utf-8")
+    assert "Quality score: 10.0/10" in (output / "report.md").read_text(encoding="utf-8")
+    assert "Release recommendation: RELEASE" in (output / "report.md").read_text(encoding="utf-8")
 
 
 def test_report_classifies_task_grader_evidence_and_fixture_failures(tmp_path):

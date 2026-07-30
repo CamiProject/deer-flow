@@ -364,12 +364,21 @@ break-glass path.
 
 The SaaS integration covers the JWT contract, IAM resolver APIs, Ontology policy,
 deployment variables, Action lifecycle, and security boundaries.
+Ontology Actions may declare natural-language keywords for intent resolution. Gateway
+Run Events retain bounded SubAgent `tool.*` trajectory records plus Semantic trace and
+Action proposal correlation IDs, allowing Evals to join Run, Semantic Audit, and Action
+evidence without persisting full tool results in trace events.
 
 #### Offline Agent Evals
 
 The opt-in Evals MVP executes versioned SaaS cases through the real Gateway Run
 lifecycle, collects Run/Semantic/Action/Fixture evidence, applies deterministic
-P0/P1 graders, and writes JSONL, JSON, and Markdown gate reports.
+P0/P1 graders, and writes JSONL, JSON, and Markdown reports. Reports keep a binary
+Safety Gate for authorization, Scope, Action state, write outcome, and required
+evidence, plus a weighted Quality Score from 0 to 10. A score of 8 or higher
+recommends release, 7 to 7.9 requires manual approval, and lower scores recommend hold.
+Secure preflight denial is valid for explicitly configured negative Action cases when
+audited capability or target checks show no proposal, execution, or fixture change.
 
 Set `config.yaml` to `evals.enabled: true` and `run_events.backend: db`, set
 `DEER_FLOW_ENV=eval` plus the Evals secrets from `.env.example`, then run:

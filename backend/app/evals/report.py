@@ -68,10 +68,18 @@ def write_report(
     scores: list[ScoreResult],
     fail_on_any_p0: bool,
     minimum_p1_score: float,
+    minimum_quality_score: float = 8.0,
+    conditional_quality_score: float = 7.0,
 ) -> Path:
     output = Path(output_root) / eval_run_id
     output.mkdir(parents=True, exist_ok=False)
-    gate = evaluate_gate(scores, fail_on_any_p0=fail_on_any_p0, minimum_p1_score=minimum_p1_score)
+    gate = evaluate_gate(
+        scores,
+        fail_on_any_p0=fail_on_any_p0,
+        minimum_p1_score=minimum_p1_score,
+        minimum_quality_score=minimum_quality_score,
+        conditional_quality_score=conditional_quality_score,
+    )
     aggregate = aggregate_results(observations, scores)
     failure_classification = _classify_failures(observations, scores)
 
@@ -99,12 +107,13 @@ def write_report(
     _write_jsonl(output / "scores.jsonl", score_payloads)
     _write_json(output / "report.json", report)
 
-    p0_status = "FAILED" if gate.p0_failures else ("INCOMPLETE" if gate.incomplete_required else "PASSED")
     lines = [
         f"# Eval Report: {eval_run_id}",
         "",
-        f"- P0 hard gate: {p0_status}",
+        f"- P0 hard gate: {gate.hard_gate_status.upper()}",
         f"- Release gate: {gate.status.upper()}",
+        f"- Quality score: {gate.quality_score if gate.quality_score is not None else 'n/a'}/10",
+        f"- Release recommendation: {gate.release_recommendation.upper()}",
         f"- Trials: {len(observations)}",
         f"- Scores: {len(scores)}",
         f"- P0 failures: {gate.p0_failures}",

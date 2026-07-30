@@ -17,11 +17,12 @@ class FakeStatus:
 
 
 class FakeResult:
-    def __init__(self, *, status="completed", result=None, error=None):
+    def __init__(self, *, status="completed", result=None, error=None, ai_messages=None):
         self.status = SimpleNamespace(value=status)
         self.result = result
         self.error = error
         self.token_usage_records = []
+        self.ai_messages = ai_messages or []
 
 
 def _app_config():
@@ -119,6 +120,11 @@ async def test_saas_query_covered_question_uses_only_semantic_tools(monkeypatch)
     from deerflow.agents.saas_query import agent as module
 
     calls = []
+    recorded_tool_messages = []
+
+    class Journal:
+        def record_external_tool_messages(self, messages, *, caller):
+            recorded_tool_messages.append((messages, caller))
 
     class DummyExecutor:
         def __init__(self, **kwargs):
@@ -127,7 +133,10 @@ async def test_saas_query_covered_question_uses_only_semantic_tools(monkeypatch)
 
         async def _aexecute(self, prompt):
             calls[-1]["prompt"] = prompt
-            return FakeResult(result=f"{self.config.name} semantic result")
+            return FakeResult(
+                result=f"{self.config.name} semantic result",
+                ai_messages=[{"type": "tool", "name": "query_metrics"}],
+            )
 
     async def coverage(_question, _runtime):
         return {
@@ -159,6 +168,7 @@ async def test_saas_query_covered_question_uses_only_semantic_tools(monkeypatch)
                 "run_id": "run-1",
                 "thread_id": "thread-1",
                 "app_config": _app_config(),
+                "__run_journal": Journal(),
             }
         },
     )
@@ -168,6 +178,10 @@ async def test_saas_query_covered_question_uses_only_semantic_tools(monkeypatch)
     assert {tool.name for tool in calls[0]["tools"]} == {tool.name for tool in module.SEMANTIC_READ_TOOLS}
     assert {tool.name for tool in calls[1]["tools"]} == {tool.name for tool in module.SEMANTIC_VALIDATION_TOOLS}
     assert all(call["config"].skills == [] for call in calls)
+    assert [caller for _, caller in recorded_tool_messages] == [
+        "subagent:mysql-query",
+        "subagent:mysql-validator",
+    ]
     assert "不允许生成或执行 SQL" in calls[0]["prompt"]
     assert "不生成第二条 SQL" in calls[1]["prompt"]
 

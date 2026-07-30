@@ -122,6 +122,9 @@ async def test_real_action_worker_chain_uses_isolated_fixture(
     expected_status,
     expected_name,
 ):
+    monkeypatch.setenv("DEER_FLOW_ENV", "eval")
+    monkeypatch.setenv("EVALS_AUTHORIZATION_JWT_KEY", JWT_KEY)
+    monkeypatch.setenv("EVALS_AUTHORIZATION_JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", JWT_KEY)
     monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
     monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ISSUER", "saas-gateway")
@@ -201,5 +204,5 @@ async def test_real_action_worker_chain_uses_isolated_fixture(
         await engine.dispose()
 
     assert final is not None
-    assert final["status"] == expected_status
+    assert final["status"] == expected_status, (final.get("error_code"), final.get("error_detail"), final)
     assert fixture_state.json()["state"]["sites"]["site-1"]["display_name"] == expected_name

@@ -63,7 +63,12 @@ def test_cli_run_wires_suite_clients_runner_and_gate_exit_code(
             assert suite is loaded
             return SimpleNamespace(
                 eval_run_id="eval-cli-1",
-                gate=SimpleNamespace(status=gate_status),
+                gate=SimpleNamespace(
+                    status=gate_status,
+                    hard_gate_status=gate_status,
+                    quality_score=10.0 if gate_status == "passed" else 6.0,
+                    release_recommendation="release" if gate_status == "passed" else "hold",
+                ),
                 output_dir=output_dir / "eval-cli-1",
             )
 
@@ -86,9 +91,12 @@ def test_cli_run_wires_suite_clients_runner_and_gate_exit_code(
     )
 
     assert result == exit_code
+    output = capsys.readouterr().out
+    assert "Safety gate:" in output
+    assert "Quality score:" in output
+    assert "Release recommendation:" in output
     assert constructed["gateway"] is settings
     assert constructed["semantic"] is settings
     assert constructed["fixture"] is settings
-    output = capsys.readouterr().out
     assert "Eval run: eval-cli-1" in output
-    assert f"Gate: {gate_status.upper()}" in output
+    assert f"Safety gate: {gate_status.upper()}" in output

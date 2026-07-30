@@ -62,6 +62,36 @@ def test_eval_contracts_validate_a_complete_case_and_suite():
 
     assert case.fixture.scope.site_ids == ("site-1", "site-2")
     assert suite.gate.fail_on_any_p0 is True
+    assert suite.gate.minimum_quality_score == 8.0
+    assert suite.gate.conditional_quality_score == 7.0
+
+
+def test_eval_contracts_accept_soft_answer_variants_and_preflight_action_rejection():
+    payload = _case_payload()
+    payload["expect"]["answer"] = {"contains_any": ["not found", "no access"]}
+    payload["expect"]["action"] = {
+        "outcome": "rejected",
+        "allow_preflight_rejection": True,
+    }
+
+    case = EvalCase.model_validate(payload)
+
+    assert case.expect.answer is not None
+    assert case.expect.answer.contains_any == ("not found", "no access")
+    assert case.expect.action is not None
+    assert case.expect.action.allow_preflight_rejection is True
+
+
+def test_eval_suite_rejects_attempt_to_disable_p0_hard_gates():
+    with pytest.raises(ValidationError, match="P0 hard gates cannot be disabled"):
+        EvalSuite.model_validate(
+            {
+                "suite_id": "unsafe-suite",
+                "version": "1",
+                "case_files": ["cases.jsonl"],
+                "gate": {"fail_on_any_p0": False},
+            }
+        )
 
 
 def test_eval_case_rejects_duplicate_graders_and_non_eval_fixture_identity():

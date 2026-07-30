@@ -29,9 +29,20 @@ class StrictModel(BaseModel):
 
 class EvalGate(StrictModel):
     fail_on_any_p0: bool = True
+    # Kept for loading older suites and legacy report comparison; Quality Score drives release decisions.
     minimum_p1_score: float = Field(default=0.8, ge=0, le=1)
+    minimum_quality_score: float = Field(default=8.0, ge=0, le=10)
+    conditional_quality_score: float = Field(default=7.0, ge=0, le=10)
     maximum_token_regression: float | None = Field(default=None, ge=0)
     maximum_latency_regression: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_quality_thresholds(self) -> EvalGate:
+        if not self.fail_on_any_p0:
+            raise ValueError("P0 hard gates cannot be disabled")
+        if self.conditional_quality_score > self.minimum_quality_score:
+            raise ValueError("conditional_quality_score cannot exceed minimum_quality_score")
+        return self
 
 
 class EvalSuite(StrictModel):
@@ -89,13 +100,14 @@ class EvalFixture(StrictModel):
 class AnswerExpectation(StrictModel):
     exact_text: str | None = None
     contains: tuple[str, ...] = ()
+    contains_any: tuple[str, ...] = ()
     numeric_value: float | None = None
     tolerance: float = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def require_assertion(self) -> AnswerExpectation:
-        if self.exact_text is None and not self.contains and self.numeric_value is None:
-            raise ValueError("answer expectation requires exact_text, contains or numeric_value")
+        if self.exact_text is None and not self.contains and not self.contains_any and self.numeric_value is None:
+            raise ValueError("answer expectation requires exact_text, contains, contains_any or numeric_value")
         return self
 
 
@@ -135,6 +147,7 @@ class ActionExpectation(StrictModel):
     proposal_status: str | None = None
     execution_status: str | None = None
     rejection_code: str | None = None
+    allow_preflight_rejection: bool = False
     expected_after: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -336,7 +349,11 @@ class LoadedSuite(StrictModel):
 class GateResult(StrictModel):
     status: ScoreStatus
     passed: bool
+    hard_gate_status: ScoreStatus
     p0_failures: int = Field(ge=0)
     incomplete_required: int = Field(ge=0)
     p1_score: float | None = Field(default=None, ge=0, le=1)
+    quality_score: float | None = Field(default=None, ge=0, le=10)
+    quality_dimensions: dict[str, float] = Field(default_factory=dict)
+    release_recommendation: Literal["release", "conditional", "hold"]
     reason_codes: tuple[str, ...] = ()

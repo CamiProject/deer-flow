@@ -231,6 +231,8 @@ class EvalRunner:
             scores,
             fail_on_any_p0=gate_config.fail_on_any_p0,
             minimum_p1_score=gate_config.minimum_p1_score,
+            minimum_quality_score=gate_config.minimum_quality_score,
+            conditional_quality_score=gate_config.conditional_quality_score,
         )
         output_dir = write_report(
             output_root=self._settings.output_root,
@@ -250,6 +252,8 @@ class EvalRunner:
             scores=scores,
             fail_on_any_p0=gate_config.fail_on_any_p0,
             minimum_p1_score=gate_config.minimum_p1_score,
+            minimum_quality_score=gate_config.minimum_quality_score,
+            conditional_quality_score=gate_config.conditional_quality_score,
         )
         return EvalRunResult(
             eval_run_id=eval_run_id,

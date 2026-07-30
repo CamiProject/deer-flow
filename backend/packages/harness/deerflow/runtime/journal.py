@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
@@ -52,6 +53,9 @@ _SENSITIVE_TOOL_ARGUMENT_FRAGMENTS = (
     "token",
 )
 _MAX_TOOL_ARGUMENT_DEPTH = 4
+_MAX_CORRELATION_SCAN_DEPTH = 6
+_CORRELATION_FIELDS = frozenset({"semantic_trace_id", "proposal_id", "execution_id"})
+_SEMANTIC_ERROR_CODE_RE = re.compile(r"SemanticClientError:\s*([A-Z][A-Z0-9_]{2,63})\b")
 
 
 def _safe_tool_arguments(value: Any, *, depth: int = 0) -> Any:
@@ -77,6 +81,115 @@ def _safe_tool_arguments(value: Any, *, depth: int = 0) -> Any:
 def _argument_hash(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _correlation_fields(value: Any, *, depth: int = 0) -> dict[str, str]:
+    """Extract bounded, non-secret IDs used to join Gateway and Semantic evidence."""
+    if depth >= _MAX_CORRELATION_SCAN_DEPTH:
+        return {}
+    if isinstance(value, str):
+        candidate = value.strip()
+        if len(candidate) > 100_000 or not candidate.startswith(("{", "[")):
+            return {}
+        try:
+            value = json.loads(candidate)
+        except (TypeError, ValueError):
+            return {}
+    if isinstance(value, Mapping):
+        found: dict[str, str] = {}
+        for raw_key, nested in list(value.items())[:100]:
+            key = str(raw_key)
+            if key in _CORRELATION_FIELDS and isinstance(nested, str) and nested:
+                found[key] = nested[:256]
+            found.update(_correlation_fields(nested, depth=depth + 1))
+        return found
+    if isinstance(value, (list, tuple)):
+        found = {}
+        for nested in value[:100]:
+            found.update(_correlation_fields(nested, depth=depth + 1))
+        return found
+    return {}
+
+
+def _tool_output_correlations(output: Any) -> dict[str, str]:
+    if isinstance(output, ToolMessage):
+        return _correlation_fields(output.content)
+    if isinstance(output, Command):
+        return _correlation_fields(output.update.get("messages", []))
+    if isinstance(output, Mapping):
+        return _correlation_fields(output)
+    return {}
+
+
+def tool_evidence_events_from_message(
+    message: Mapping[str, Any],
+    *,
+    caller: str,
+) -> list[dict[str, Any]]:
+    """Convert one captured subagent message into bounded trajectory events."""
+    bounded_caller = str(caller or "subagent")[:256]
+    message_type = str(message.get("type") or "")
+    if message_type == "ai":
+        events: list[dict[str, Any]] = []
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return events
+        for call in tool_calls[:100]:
+            if not isinstance(call, Mapping):
+                continue
+            arguments = _safe_tool_arguments(call.get("args") or {})
+            tool_call_id = str(call.get("id") or "unknown")[:128]
+            events.append(
+                {
+                    "event_type": "tool.call",
+                    "category": "trace",
+                    "content": {
+                        "tool_name": str(call.get("name") or "unknown")[:256],
+                        "tool_call_id": tool_call_id,
+                        "caller": bounded_caller,
+                        "status": "started",
+                        "arguments_hash": _argument_hash(arguments),
+                    },
+                    "metadata": {},
+                }
+            )
+        return events
+    if message_type != "tool":
+        return []
+    message_content = message.get("content")
+    error_match = _SEMANTIC_ERROR_CODE_RE.search(str(message_content or "")[:100_000])
+    if str(message.get("status") or "success").lower() == "error":
+        content = {
+            "tool_name": str(message.get("name") or "unknown")[:256],
+            "tool_call_id": str(message.get("tool_call_id") or "unknown")[:128],
+            "caller": bounded_caller,
+            "status": "failed",
+            "error_type": "SemanticClientError" if error_match else "ToolError",
+        }
+        if error_match:
+            content["code"] = error_match.group(1)
+        return [
+            {
+                "event_type": "tool.error",
+                "category": "error",
+                "content": content,
+                "metadata": {},
+            }
+        ]
+    return [
+        {
+            "event_type": "tool.end",
+            "category": "trace",
+            "content": {
+                "tool_name": str(message.get("name") or "unknown")[:256],
+                "tool_call_id": str(message.get("tool_call_id") or "unknown")[:128],
+                "caller": bounded_caller,
+                "status": "succeeded",
+                **_correlation_fields(message_content),
+            },
+            "metadata": {},
+        }
+    ]
 
 
 def _should_persist_human_input_message(message: BaseMessage) -> bool:
@@ -156,6 +269,7 @@ class RunJournal(BaseCallbackHandler):
         self._current_run_tool_call_names: dict[str, str] = {}
         self._persisted_tool_message_identities: set[str] = set()
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
+        self._external_tool_event_keys: set[tuple[str, str, str]] = set()
 
     # -- Lifecycle callbacks --
 
@@ -416,6 +530,7 @@ class RunJournal(BaseCallbackHandler):
                 "caller": str(started.get("caller") or "lead_agent")[:256],
                 "status": "succeeded",
                 "arguments_hash": started.get("arguments_hash"),
+                **_tool_output_correlations(output),
             },
         )
         try:
@@ -439,17 +554,21 @@ class RunJournal(BaseCallbackHandler):
         """Persist a typed failure without storing provider or credential details."""
         callback_id = str(run_id)
         started = self._active_tool_calls.pop(callback_id, {})
+        content = {
+            "tool_name": str(started.get("tool_name") or kwargs.get("name") or "unknown")[:256],
+            "tool_call_id": str(started.get("tool_call_id") or callback_id)[:128],
+            "caller": str(started.get("caller") or "lead_agent")[:256],
+            "status": "failed",
+            "error_type": type(error).__name__[:128],
+            "arguments_hash": started.get("arguments_hash"),
+        }
+        error_code = getattr(error, "code", None)
+        if isinstance(error_code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", error_code):
+            content["code"] = error_code
         self._put(
             event_type="tool.error",
             category="error",
-            content={
-                "tool_name": str(started.get("tool_name") or kwargs.get("name") or "unknown")[:256],
-                "tool_call_id": str(started.get("tool_call_id") or callback_id)[:128],
-                "caller": str(started.get("caller") or "lead_agent")[:256],
-                "status": "failed",
-                "error_type": type(error).__name__[:128],
-                "arguments_hash": started.get("arguments_hash"),
-            },
+            content=content,
         )
 
     # -- Internal methods --
@@ -689,6 +808,28 @@ class RunJournal(BaseCallbackHandler):
             self._record_model_usage(record.get("model_name"), input_tk, output_tk, total_tk, int(cache_read_tk))
 
             self._schedule_progress_flush()
+
+    def record_external_tool_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        caller: str,
+    ) -> None:
+        """Persist child-agent tool trajectory without replaying child LLM callbacks."""
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+            for event in tool_evidence_events_from_message(message, caller=caller):
+                content = event["content"]
+                key = (
+                    event["event_type"],
+                    str(content.get("tool_call_id") or ""),
+                    str(content.get("caller") or ""),
+                )
+                if key in self._external_tool_event_keys:
+                    continue
+                self._external_tool_event_keys.add(key)
+                self._put(**event)
 
     def set_first_human_message(self, content: str) -> None:
         """Record the first human message for convenience fields."""

@@ -220,3 +220,63 @@ async def test_collector_classifies_fixture_state_failure_separately():
 
     assert observation.evidence_quality.status == "fixture_failed"
     assert observation.evidence_quality.missing == ("fixture_outcome",)
+
+
+class _PreflightSemanticEvidence:
+    async def get_trace(self, trace_id, **kwargs):
+        del kwargs
+        assert trace_id == "semantic-preflight-1"
+        return {
+            "events": [
+                {
+                    "event_type": "object.get",
+                    "scope_hash": "scope-1",
+                    "details": {"object_type": "Site", "scope_predicates_applied": 1},
+                }
+            ]
+        }
+
+
+async def test_collector_accepts_audited_preflight_rejection_as_complete_action_evidence():
+    payload = _action_case().model_dump(mode="json")
+    payload["expect"]["action"] = {
+        "outcome": "rejected",
+        "action_id": "site.update_display_name",
+        "target_id": "site-2",
+        "rejection_code": "AUTHORIZATION_DENIED",
+        "allow_preflight_rejection": True,
+    }
+    case = EvalCase.model_validate(payload)
+    collector = ObservationCollector(semantic=_PreflightSemanticEvidence(), fixture=_Fixture())
+
+    observation = await collector.collect(
+        case=case,
+        eval_run_id="eval-1",
+        trial_index=0,
+        trial_id="trial-1",
+        expected_scope_hash="scope-1",
+        authorization_token="signed-context",
+        before_state={"site_name": "Updated"},
+        gateway=GatewayTrialResult(
+            thread_id="thread-1",
+            run_id="run-1",
+            wait_response={"messages": [{"type": "ai", "content": "Target is outside Scope"}]},
+            run={"assistant_id": "saas-query", "status": "success", "metadata": {"scope_hash": "scope-1"}},
+            events=[
+                {"seq": 1, "event_type": "run.start", "content": {}, "metadata": {}},
+                {
+                    "seq": 2,
+                    "event_type": "tool.call",
+                    "content": {"tool_name": "get_object", "tool_call_id": "tool-1"},
+                    "semantic_trace_id": "semantic-preflight-1",
+                },
+            ],
+            latency_ms=5,
+        ),
+        git_commit=None,
+    )
+
+    assert observation.action.proposals == ()
+    assert observation.action.executions == ()
+    assert observation.evidence_quality.status == "complete"
+    assert "action_evidence" not in observation.evidence_quality.missing
