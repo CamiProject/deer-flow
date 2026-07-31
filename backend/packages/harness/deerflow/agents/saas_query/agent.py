@@ -373,6 +373,24 @@ async def _saas_query_node(
         )
         return {"messages": [AIMessage(content=(f"SaaS 业务语义服务当前不可用，已按 fail-closed 策略停止；未降级到自由 SQL。错误类别：{exc.code}。"))]}
 
+    action_authorization = coverage.get("action_authorization")
+    if isinstance(action_authorization, dict) and action_authorization.get("status") == "denied":
+        code = str(action_authorization.get("code") or "AUTHORIZATION_DENIED")
+        semantic_trace_id = str(coverage.get("semantic_trace_id") or "")
+        event = {
+            "type": "saas_query_action_preflight_denied",
+            "code": code,
+            "semantic_trace_id": semantic_trace_id,
+        }
+        _publish(writer, event)
+        journal = runtime.get("__run_journal")
+        if journal is not None and hasattr(journal, "record_semantic_preflight_denial"):
+            journal.record_semantic_preflight_denial(
+                code=code,
+                semantic_trace_id=semantic_trace_id,
+            )
+        return {"messages": [AIMessage(content="当前操作未获得授权，已在 Semantic Platform 预检阶段拒绝。未创建 Action 提议，也未执行任何写回。")]}
+
     if not _is_semantically_covered(coverage):
         if _sql_fallback_allowed(runtime):
             _publish(writer, {"type": "saas_query_routed", "route": "scoped_sql_fallback"})

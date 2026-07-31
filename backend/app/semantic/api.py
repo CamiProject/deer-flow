@@ -106,13 +106,14 @@ async def _record_audit(
     authorization: AuthorizationContext,
     event_type: str,
     details: dict[str, Any],
+    decision: str = "allow",
 ) -> None:
     repository: SemanticAuditRepository = request.app.state.semantic_audit_repository
     await repository.record(
         request_context=request_context,
         authorization=authorization,
         event_type=event_type,
-        decision="allow",
+        decision=decision,
         details=details,
     )
 
@@ -236,6 +237,16 @@ def create_app(*, settings=None, ontology=None, sql_policy=None) -> FastAPI:
                 include_facts=body.include_facts,
                 fact_limit=body.fact_limit,
             )
+            # Resolve without authorization only to detect a denied Action intent.
+            # Do not return the unfiltered Action definition or identifier.
+            unfiltered = resolved_ontology.resolve(body.question)
+            authorized_action_ids = {str(item.get("id")) for item in result.get("actions", []) if isinstance(item, dict) and item.get("id")}
+            action_authorization = None
+            if unfiltered.get("actions") and not authorized_action_ids:
+                action_authorization = {
+                    "status": "denied",
+                    "code": "AUTHORIZATION_DENIED",
+                }
             await _record_audit(
                 request,
                 request_context=request_context,
@@ -249,8 +260,12 @@ def create_app(*, settings=None, ontology=None, sql_policy=None) -> FastAPI:
                     "action_ids": [item.get("id") for item in result.get("actions", [])],
                     "fact_group_count": len(result.get("facts", [])),
                     "source_refs": result.get("source_refs", []),
+                    "action_decision": action_authorization,
                 },
+                decision="deny" if action_authorization else "allow",
             )
+            if action_authorization:
+                result = {**result, "action_authorization": action_authorization}
             return _traced(result, request_context)
         except Exception as exc:
             raise _handle_domain_error(exc) from exc

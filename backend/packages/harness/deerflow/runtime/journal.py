@@ -56,6 +56,8 @@ _MAX_TOOL_ARGUMENT_DEPTH = 4
 _MAX_CORRELATION_SCAN_DEPTH = 6
 _CORRELATION_FIELDS = frozenset({"semantic_trace_id", "proposal_id", "execution_id"})
 _SEMANTIC_ERROR_CODE_RE = re.compile(r"SemanticClientError:\s*([A-Z][A-Z0-9_]{2,63})\b")
+_SECURITY_REJECTION_CODE_RE = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
+_MAX_SEMANTIC_TRACE_ID_LENGTH = 128
 
 
 def _safe_tool_arguments(value: Any, *, depth: int = 0) -> Any:
@@ -830,6 +832,32 @@ class RunJournal(BaseCallbackHandler):
                     continue
                 self._external_tool_event_keys.add(key)
                 self._put(**event)
+
+    def record_semantic_preflight_denial(
+        self,
+        *,
+        code: str,
+        semantic_trace_id: str,
+    ) -> bool:
+        """Persist bounded correlation evidence for a denied Semantic preflight."""
+        normalized_code = str(code).strip()
+        normalized_trace_id = str(semantic_trace_id).strip()
+        if _SECURITY_REJECTION_CODE_RE.fullmatch(normalized_code) is None:
+            logger.warning("Skipped Semantic preflight denial with invalid rejection code")
+            return False
+        if not normalized_trace_id or len(normalized_trace_id) > _MAX_SEMANTIC_TRACE_ID_LENGTH:
+            logger.warning("Skipped Semantic preflight denial with invalid trace ID")
+            return False
+        self._put(
+            event_type="saas_query.action_preflight_denied",
+            category="security",
+            content={
+                "type": "saas_query_action_preflight_denied",
+                "code": normalized_code,
+                "semantic_trace_id": normalized_trace_id,
+            },
+        )
+        return True
 
     def set_first_human_message(self, content: str) -> None:
         """Record the first human message for convenience fields."""

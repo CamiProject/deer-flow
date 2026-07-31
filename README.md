@@ -368,6 +368,10 @@ Ontology Actions may declare natural-language keywords for intent resolution. Ga
 Run Events retain bounded SubAgent `tool.*` trajectory records plus Semantic trace and
 Action proposal correlation IDs, allowing Evals to join Run, Semantic Audit, and Action
 evidence without persisting full tool results in trace events.
+The `propose_action` tool is a deterministic prepare operation: it persists and previews
+the proposal in one call, but never executes it. Semantic preflight streams and persists
+bounded `AUTHORIZATION_DENIED` evidence for a matched but unauthorized Action before
+SubAgents run.
 
 #### Offline Agent Evals
 

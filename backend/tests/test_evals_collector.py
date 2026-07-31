@@ -237,6 +237,28 @@ class _PreflightSemanticEvidence:
         }
 
 
+class _DeniedActionSemanticEvidence:
+    async def get_trace(self, trace_id, **kwargs):
+        del kwargs
+        assert trace_id == "semantic-action-denied"
+        return {
+            "events": [
+                {
+                    "event_type": "ontology.resolve",
+                    "decision": "deny",
+                    "scope_hash": "scope-1",
+                    "details": {
+                        "action_ids": [],
+                        "action_decision": {
+                            "status": "denied",
+                            "code": "AUTHORIZATION_DENIED",
+                        },
+                    },
+                }
+            ]
+        }
+
+
 async def test_collector_accepts_audited_preflight_rejection_as_complete_action_evidence():
     payload = _action_case().model_dump(mode="json")
     payload["expect"]["action"] = {
@@ -280,3 +302,52 @@ async def test_collector_accepts_audited_preflight_rejection_as_complete_action_
     assert observation.action.executions == ()
     assert observation.evidence_quality.status == "complete"
     assert "action_evidence" not in observation.evidence_quality.missing
+
+
+async def test_collector_accepts_deterministic_action_authorization_preflight():
+    payload = _action_case().model_dump(mode="json")
+    payload["expect"]["action"] = {
+        "outcome": "rejected",
+        "action_id": "site.update_display_name",
+        "target_id": "site-1",
+        "rejection_code": "AUTHORIZATION_DENIED",
+        "allow_preflight_rejection": True,
+    }
+    case = EvalCase.model_validate(payload)
+    collector = ObservationCollector(semantic=_DeniedActionSemanticEvidence(), fixture=_Fixture())
+
+    observation = await collector.collect(
+        case=case,
+        eval_run_id="eval-1",
+        trial_index=0,
+        trial_id="trial-1",
+        expected_scope_hash="scope-1",
+        authorization_token="signed-context",
+        before_state={"site_name": "Updated"},
+        gateway=GatewayTrialResult(
+            thread_id="thread-1",
+            run_id="run-1",
+            wait_response={"messages": [{"type": "ai", "content": "Action denied"}]},
+            run={"assistant_id": "saas-query", "status": "success", "metadata": {"scope_hash": "scope-1"}},
+            events=[
+                {"seq": 1, "event_type": "run.start", "content": {}, "metadata": {}},
+                {
+                    "seq": 2,
+                    "event_type": "custom",
+                    "content": {
+                        "type": "saas_query_action_preflight_denied",
+                        "code": "AUTHORIZATION_DENIED",
+                        "semantic_trace_id": "semantic-action-denied",
+                    },
+                },
+            ],
+            latency_ms=5,
+        ),
+        git_commit=None,
+    )
+
+    assert observation.semantic.audit_event_count == 1
+    assert observation.action.rejection_codes == ("AUTHORIZATION_DENIED",)
+    assert observation.action.proposals == ()
+    assert observation.action.executions == ()
+    assert observation.evidence_quality.status == "complete"

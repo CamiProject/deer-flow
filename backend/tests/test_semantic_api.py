@@ -304,6 +304,58 @@ def test_semantic_api_resolves_scope_ref_with_fresh_signed_token(monkeypatch, tm
     assert captured["headers"]["x-saas-internal-token"] == "scope-service-secret"
 
 
+def test_ontology_resolve_reports_denied_action_without_disclosing_definition(monkeypatch, tmp_path):
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", SECRET)
+    monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")
+    ontology = OntologyRegistry.from_mapping(
+        {
+            "version": "1",
+            "objects": {
+                "Site": {
+                    "table": "iot_site",
+                    "id_field": "id",
+                    "properties": {"id": {"column": "id", "type": "string"}},
+                }
+            },
+            "links": {},
+            "metrics": {},
+            "actions": {
+                "site.secret_rename": {
+                    "label": "rename site display name",
+                    "keywords": ["rename", "display name"],
+                    "target_type": "Site",
+                    "scope_dimension": "site",
+                    "authorization": {"allowed_roles": ["site_admin"]},
+                    "parameters": {"name": {"type": "string", "required": True}},
+                    "approval": {"required": True},
+                    "executor": {"type": "domain_api", "path": "/sites/{target_id}"},
+                }
+            },
+        }
+    )
+    app = create_app(settings=_settings(tmp_path), ontology=ontology, sql_policy=_policy())
+    viewer_token = _token(role_codes=["viewer"])
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/ontology/resolve",
+            headers=_headers(viewer_token),
+            json={"question": "rename site display name", "include_facts": False},
+        )
+        trace = client.get("/v1/audit/traces/semantic-trace-1", headers=_headers(viewer_token))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["actions"] == []
+    assert payload["action_authorization"] == {
+        "status": "denied",
+        "code": "AUTHORIZATION_DENIED",
+    }
+    assert "site.secret_rename" not in str(payload)
+    assert trace.status_code == 200
+    assert trace.json()["events"][0]["decision"] == "deny"
+    assert trace.json()["events"][0]["details"]["action_decision"]["code"] == "AUTHORIZATION_DENIED"
+
+
 def test_semantic_api_rejects_scope_ref_resolution_to_tenant_all(monkeypatch, tmp_path):
     monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_KEY", SECRET)
     monkeypatch.setenv("SAAS_AUTHORIZATION_JWT_ALGORITHMS", "HS256")

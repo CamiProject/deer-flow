@@ -368,6 +368,10 @@ Events. Result events retain only allowlisted `semantic_trace_id`, `proposal_id`
 Direct Semantic SubAgent Action parameters and full responses are not copied into trace
 events. The SaaS Query graph records direct semantic SubAgents through `RunJournal`, while
 ordinary background SubAgents project the same evidence from `task_running` events.
+The `propose_action` tool is a deterministic prepare operation: it persists and previews
+the proposal in one call, but never executes it. Semantic preflight streams and persists
+bounded `AUTHORIZATION_DENIED` evidence for a matched but unauthorized Action before
+SubAgents run.
 
 The existing `/sql-cross-validate/*` routes remain A-protected compatibility/break-glass
 paths. SQL SubAgents set `skills=[]`; semantic-mode `mysql-query` receives only Semantic

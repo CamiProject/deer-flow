@@ -14,7 +14,7 @@ from deerflow.semantic.client import (
     SemanticClientError,
     SemanticPlatformClient,
 )
-from deerflow.tools.builtins.semantic_tools import SEMANTIC_TOOLS, query_metrics
+from deerflow.tools.builtins.semantic_tools import SEMANTIC_TOOLS, propose_action, query_metrics
 
 
 @pytest.mark.asyncio
@@ -132,3 +132,44 @@ async def test_query_metrics_tool_uses_only_structured_semantic_request(monkeypa
         "order_by": [{"field": "site.count", "direction": "desc"}],
         "limit": 20,
     }
+
+
+@pytest.mark.asyncio
+async def test_propose_action_persists_and_previews_without_executing(monkeypatch):
+    calls = []
+
+    class FakeClient:
+        async def propose_action(self, **kwargs):
+            calls.append(("propose", kwargs))
+            return {"proposal_id": "proposal-1", "status": "PROPOSED"}
+
+        async def preview_action(self, **kwargs):
+            calls.append(("preview", kwargs))
+            return {"proposal_id": "proposal-1", "status": "PENDING_APPROVAL"}
+
+    monkeypatch.setattr(
+        "deerflow.tools.builtins.semantic_tools._client",
+        lambda _runtime: FakeClient(),
+    )
+
+    result = await propose_action.coroutine(
+        action_id="site.rename",
+        target_id="site-1",
+        parameters={"name": "New"},
+        runtime=SimpleNamespace(),
+    )
+
+    assert result == {"proposal_id": "proposal-1", "status": "PENDING_APPROVAL"}
+    assert calls == [
+        (
+            "propose",
+            {
+                "action_id": "site.rename",
+                "target_id": "site-1",
+                "parameters": {"name": "New"},
+                "reason": None,
+                "expected_object_version": None,
+            },
+        ),
+        ("preview", {"proposal_id": "proposal-1"}),
+    ]

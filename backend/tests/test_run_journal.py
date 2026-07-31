@@ -733,6 +733,56 @@ class TestMiddlewareEvents:
         assert "middleware:guardrail" in event_types
 
 
+class TestSemanticSecurityEvents:
+    @pytest.mark.anyio
+    async def test_record_semantic_preflight_denial_persists_only_safe_evidence(self, journal_setup):
+        j, store = journal_setup
+
+        recorded = j.record_semantic_preflight_denial(
+            code="AUTHORIZATION_DENIED",
+            semantic_trace_id="semantic-trace-denied",
+        )
+        await j.flush()
+
+        events = await store.list_events("t1", "r1")
+        assert recorded is True
+        assert len(events) == 1
+        assert events[0]["event_type"] == "saas_query.action_preflight_denied"
+        assert events[0]["category"] == "security"
+        assert events[0]["content"] == {
+            "type": "saas_query_action_preflight_denied",
+            "code": "AUTHORIZATION_DENIED",
+            "semantic_trace_id": "semantic-trace-denied",
+        }
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("code", "semantic_trace_id"),
+        [
+            ("authorization_denied", "semantic-trace-denied"),
+            ("AUTHORIZATION DENIED", "semantic-trace-denied"),
+            ("AUTHORIZATION_DENIED", ""),
+            ("AUTHORIZATION_DENIED", "x" * 129),
+        ],
+    )
+    async def test_record_semantic_preflight_denial_skips_invalid_evidence(
+        self,
+        journal_setup,
+        code,
+        semantic_trace_id,
+    ):
+        j, store = journal_setup
+
+        recorded = j.record_semantic_preflight_denial(
+            code=code,
+            semantic_trace_id=semantic_trace_id,
+        )
+        await j.flush()
+
+        assert recorded is False
+        assert await store.list_events("t1", "r1") == []
+
+
 class TestCallerBucketing:
     """Tests for caller-bucketed token accumulation (lead_agent / subagent / middleware)."""
 

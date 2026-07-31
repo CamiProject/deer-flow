@@ -145,7 +145,7 @@ async def propose_action(
     expected_object_version: str | None = None,
     runtime: Runtime = None,
 ) -> dict[str, Any]:
-    """Persist an idempotent Action proposal; this does not execute the Action.
+    """Persist and preview an idempotent Action proposal; this does not execute it.
 
     Args:
         action_id: Controlled Action identifier from list_available_actions.
@@ -155,15 +155,17 @@ async def propose_action(
         expected_object_version: Optional optimistic concurrency version.
 
     Returns:
-        Persisted proposal identifier and validation status.
+        Preview result with the persisted proposal identifier and approval status.
     """
-    return await _client(runtime).propose_action(
+    client = _client(runtime)
+    proposal = await client.propose_action(
         action_id=action_id,
         target_id=target_id,
         parameters=parameters,
         reason=reason,
         expected_object_version=expected_object_version,
     )
+    return await client.preview_action(proposal_id=proposal["proposal_id"])
 
 
 @tool("preview_action", parse_docstring=True)

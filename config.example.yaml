@@ -73,10 +73,12 @@ max_recursion_limit: 1000
 # ============================================================================
 # The two model names must also exist under `models` below. The router is
 # disabled by default; use shadow before enforce in a production deployment.
+# Before enforce, populate the examples JSONL and build the FAISS index with:
+# `uv run --project backend python scripts/build_model_routing_index.py`.
 model_routing:
   mode: disabled  # disabled | shadow | enforce
-  # simple_model: configured-simple-model
-  # complex_model: configured-complex-model
+  # simple_model: deepseek-v4-flash
+  # complex_model: deepseek-v4-pro
   rules_version: "1"
   faiss:
     index_path: .deer-flow/model-routing/routes.faiss
@@ -94,6 +96,7 @@ model_routing:
 # ============================================================================
 # Offline Evals (one-shot CLI; credentials and service URLs stay in .env)
 # ============================================================================
+# When enabled for formal Evals, also set `run_events.backend: db` below.
 evals:
   enabled: false
   output_dir: .deer-flow/evals/runs
@@ -309,12 +312,13 @@ models:
   #       thinking:
   #         type: disabled
 
-  # Example: DeepSeek V4 model (with thinking support)
-  # - name: deepseek-v4
-  #   display_name: DeepSeek V4 (Thinking)
+  # Example: DeepSeek V4 Pro model for complex routes
+  # - name: deepseek-v4-pro
+  #   display_name: DeepSeek V4 Pro
   #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
   #   model: deepseek-v4-pro
   #   api_key: $DEEPSEEK_API_KEY
+  #   base_url: https://api.deepseek.com
   #   timeout: 600.0
   #   max_retries: 2
   #   max_tokens: 8192
@@ -328,6 +332,19 @@ models:
   #     extra_body:
   #       thinking:
   #         type: disabled
+
+  # Example: DeepSeek V4 Flash model for simple routes
+  # - name: deepseek-v4-flash
+  #   display_name: DeepSeek V4 Flash
+  #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
+  #   model: deepseek-v4-flash
+  #   api_key: $DEEPSEEK_API_KEY
+  #   base_url: https://api.deepseek.com
+  #   timeout: 600.0
+  #   max_retries: 2
+  #   max_tokens: 8192
+  #   supports_thinking: false
+  #   supports_vision: false
 
   # Example: Kimi K2.5 model
   # - name: kimi-k2.5
