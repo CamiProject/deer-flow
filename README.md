@@ -372,6 +372,11 @@ The `propose_action` tool is a deterministic prepare operation: it persists and 
 the proposal in one call, but never executes it. Semantic preflight streams and persists
 bounded `AUTHORIZATION_DENIED` evidence for a matched but unauthorized Action before
 SubAgents run.
+Semantic preflight combines exact Ontology name/label/keyword matching with an optional
+process-local FAISS index built from the same reviewed aliases. The shared local hashing
+embedding recalls Object, Metric, and Action candidates only; authorization and execution
+remain deterministic, and Action recall additionally requires an explicit write-intent
+signal. Configure this under `semantic_recall` in `config.yaml`.
 
 #### Offline Agent Evals
 
